@@ -1,95 +1,179 @@
+Here are **clear, HMRC-style Jira tasks** specifically for a **Dynamics (Dataverse) developer** based on your VSC requirement 👇
 
 ---
 
-## **Task 1: Investigate consequential process for automated request and job creation**
+## 🧾 **Task 1: Analyse Current VSC Implementation in PAD Flow**
 
-**Description**
-Perform a detailed technical investigation of the existing **Consequential process** to understand how requests and jobs are automatically created within the current system.
+### **Description**
 
-The objective is to identify all technical components, execution paths, and dependencies involved in the automation so that the same patterns can be reused or adapted for the upcoming **Bulk Work Processor / Bulk Request-Job creation design**.
+Perform a detailed technical analysis of how **VSC (Valuation Scenario Code)** is currently implemented within the PAD (Property Attribute Data) workflow in Dynamics.
 
-The analysis should trace the complete flow starting from the UI or trigger point through to request creation, job creation, and any subsequent routing or allocation.
+The objective is to understand:
 
-Areas to be covered include:
+* How VSC codes are stored and retrieved (reference data / virtual tables / Dataverse entities)
+* How VSC is surfaced in the PAD UI (forms, subgrids, controls)
+* How VSC values are saved and associated with the NDA/PAD attribute set
+* Whether there are any dependencies between:
 
-* Entry point of the consequential process (UI / custom page / PCF / backend trigger)
-* Dataverse entities/tables involved in the process
-* Custom APIs used for request or job creation
-* Plugins (including pre/post operation steps) involved in the flow
-* JavaScript logic executed on forms or custom pages
-* Power Automate flows triggered during or after creation
-* Azure Functions or external integrations (if any)
-* Use of queues (Service Bus / Storage Queue) if applicable
-* Logic used for request validation (if bypassed or automated)
-* Mechanism used to create jobs from requests
-* How request and job are linked
-* Team allocation / routing logic triggered as part of the process
+  * Dwelling Group
+  * Dwelling Type
+  * VSC Code
+* How the **VSC factor** is handled:
 
-The output should clearly identify:
+  * Default value behaviour (e.g., default = 1)
+  * Any plugin, JavaScript, or PCF logic modifying it
+* API/DAL interaction:
 
-* What logic is reused vs custom-built
-* Which parts of the current system can be reused for bulk processing
-* Which parts are tightly coupled or inefficient and should be avoided
+  * Identify the API calls used to persist and retrieve VSC codes
+  * Understand how VSC is linked to PAD records via NDA Set ID
 
-The findings should be documented and shared with the team via a walkthrough session and/or technical documentation.
+Deliverables:
+
+* Summary of current VSC data model and flow
+* List of impacted components (forms, JS, plugins, APIs, virtual entities)
+* Confirmation whether VSC is purely reference-data-driven or has custom logic dependencies
 
 ---
 
-## **Task 2: Document end-to-end flow from request creation to job linkage (Data Enhancement)**
+## 🧾 **Task 2: Validate and Enable New VSC Codes in PAD UI**
 
-**Description**
-Document the complete end-to-end technical flow for **request creation through to job creation and linkage**, specifically focusing on the **Data Enhancement job type**.
+### **Description**
 
-The goal is to establish a clear understanding of how the current system behaves so that the future bulk processing solution can replicate the required behavior without relying on manual UI steps such as “Validate Request”.
+Ensure that newly introduced VSC codes (e.g., student cluster accommodation, agriculture variants, leisure/retail composites, annex/parent, cladding-related codes) are correctly surfaced and usable within the existing PAD workflow in Dynamics.
 
-The analysis should cover the full lifecycle from user interaction to system-generated outputs, including all required attributes, validations, and system logic.
+Activities include:
 
-Areas to be covered include:
+* Verify that new VSC codes added in reference/master data are:
 
-* Request creation process:
+  * Available in the VSC selection control in PAD forms
+  * Correctly displayed with code and description
+* Validate that users can:
 
-  * Required fields and attributes for creating a valid request
-  * Default values and auto-populated fields
-  * Form-level JavaScript logic influencing request data
-  * Any hidden or system-driven attributes
+  * Select new VSC codes
+  * Save them against PAD records
+  * Retrieve them correctly on reload
+* Confirm that VSC codes are:
 
-* Validation logic:
+  * Properly associated with NDA attribute sets
+  * Persisted through existing API/DAL integration
+* Ensure no UI or validation issues occur when selecting new VSC codes
 
-  * What happens during “Validate Request”
-  * Which rules are applied (client-side vs server-side)
-  * Whether validation calls Custom APIs or plugins
-  * What minimum criteria are required for job creation
+Also verify:
 
-* Job creation logic:
+* No unintended restrictions exist on VSC selection (e.g., filtering by dwelling group/type)
+* Existing behaviour remains unchanged for current VSC codes
 
-  * How the system creates a **Data Enhancement job**
-  * Which component triggers job creation (plugin / API / flow)
-  * What data is passed from request to job
-  * How job type influences behavior
+Deliverables:
 
-* Request ↔ Job linkage:
+* Validation results confirming end-to-end functionality
+* List of any required configuration or code fixes
+* Screenshots or evidence of successful VSC selection and persistence
 
-  * How the job is linked back to the request
-  * Any additional related records created
-  * Relationship structure between entities
+---
 
-* Status and lifecycle:
+## 🧾 **Task 3: Review and Validate VSC Factor Handling in Dynamics**
 
-  * Initial statuses for request and job
-  * Any transitions triggered automatically
-  * BPF (if applicable) or stage initialization
+### **Description**
 
-* Team allocation and routing:
+Analyse and validate how the **VSC factor** is handled within Dynamics and confirm whether any changes are required to support new VSC codes.
 
-  * How jobs are assigned to teams
-  * Rules/configurations used for routing (job type, location, BA, etc.)
-  * Any Power Automate or plugin logic involved
-  * Whether assignment is automatic or manual at this stage
+Activities:
 
-* Additional considerations:
+* Identify where the VSC factor is:
 
-  * Any dependencies on PAD, hereditament, or related entities
-  * Any constraints or validations specific to Data Enhancement
-  * Performance or system limitations observed in current flow
+  * Stored (reference data / virtual table / API response)
+  * Displayed in the UI (if applicable)
+* Review current behaviour:
 
-The outcome should be a clear, structured documentation of the current-state process that can be used as a baseline for designing and implementing the **Bulk Work Processor**, ensuring that request and job creation can be automated correctly without relying on manual intervention.
+  * Default factor value (e.g., set to 1)
+  * Any logic in:
+
+    * Plugins
+    * JavaScript
+    * PCF controls
+* Validate whether:
+
+  * Factor is editable by users
+  * Factor is overridden or recalculated anywhere in the system
+* Confirm that new VSC codes:
+
+  * Can carry factor values from reference data
+  * Do not break existing behaviour
+
+Note:
+No changes should be made unless explicitly required by business rules.
+
+Deliverables:
+
+* Technical note on current factor handling
+* Confirmation whether changes are required or not
+* Identification of any risks or inconsistencies
+
+---
+
+## 🧾 **Task 4: Assess Impact and Approach for VSC Backfill on Existing PAD Records**
+
+### **Description**
+
+Assess how existing PAD records can be updated (backfilled) with new or revised VSC codes and identify the appropriate technical approach within Dynamics.
+
+Activities:
+
+* Analyse how VSC is currently stored against PAD/NDA records
+* Identify:
+
+  * Whether existing PAD records can be updated via:
+
+    * Data Enhancement jobs
+    * Direct data update (script/API)
+* Evaluate impact on:
+
+  * Existing PAD records
+  * Audit/history behaviour
+  * Validation and release process
+* Confirm whether Dynamics supports bulk update through:
+
+  * Existing workflows
+  * APIs
+  * Or requires external data migration
+
+Deliverables:
+
+* Recommended approach for backfill (Dynamics vs external script)
+* List of impacted entities and fields
+* Risks and constraints (e.g., validation dependencies, release process)
+
+---
+
+## 🧾 **Task 5: Validate End-to-End PAD Save and Release Behaviour with New VSC Codes**
+
+### **Description**
+
+Ensure that introducing new VSC codes does not impact the existing PAD lifecycle, including validation, progression, and release.
+
+Activities:
+
+* Create/update PAD records with new VSC codes
+* Validate:
+
+  * PAD validation step (pass/fail/warnings)
+  * Progression through stages (e.g., research → validation → release)
+* Confirm that:
+
+  * VSC codes persist through all stages
+  * Associated child records (VSC, source code, remarks) are correctly released
+* Verify behaviour for:
+
+  * “No Action” scenarios (if PAD is not fully processed)
+  * Reopening and editing PAD records
+
+Deliverables:
+
+* Test results confirming no regression in PAD lifecycle
+* Identification of any issues or required fixes
+
+---
+
+If you want next step, I can also:
+👉 break these into **subtasks (plugin / JS / DAL / testing split)**
+👉 or map them to **solution layers (Dynamics vs DAL vs DAP2)** for your design discussion 🚀
