@@ -1,261 +1,95 @@
 
+---
+
+## **Task 1: Investigate consequential process for automated request and job creation**
+
+**Description**
+Perform a detailed technical investigation of the existing **Consequential process** to understand how requests and jobs are automatically created within the current system.
+
+The objective is to identify all technical components, execution paths, and dependencies involved in the automation so that the same patterns can be reused or adapted for the upcoming **Bulk Work Processor / Bulk Request-Job creation design**.
+
+The analysis should trace the complete flow starting from the UI or trigger point through to request creation, job creation, and any subsequent routing or allocation.
+
+Areas to be covered include:
+
+* Entry point of the consequential process (UI / custom page / PCF / backend trigger)
+* Dataverse entities/tables involved in the process
+* Custom APIs used for request or job creation
+* Plugins (including pre/post operation steps) involved in the flow
+* JavaScript logic executed on forms or custom pages
+* Power Automate flows triggered during or after creation
+* Azure Functions or external integrations (if any)
+* Use of queues (Service Bus / Storage Queue) if applicable
+* Logic used for request validation (if bypassed or automated)
+* Mechanism used to create jobs from requests
+* How request and job are linked
+* Team allocation / routing logic triggered as part of the process
+
+The output should clearly identify:
+
+* What logic is reused vs custom-built
+* Which parts of the current system can be reused for bulk processing
+* Which parts are tightly coupled or inefficient and should be avoided
+
+The findings should be documented and shared with the team via a walkthrough session and/or technical documentation.
 
 ---
 
-# 🎯 🧾 MAIN JIRA TASK
+## **Task 2: Document end-to-end flow from request creation to job linkage (Data Enhancement)**
 
-## **Title**
+**Description**
+Document the complete end-to-end technical flow for **request creation through to job creation and linkage**, specifically focusing on the **Data Enhancement job type**.
 
-Bulk Creation of Data Enhancement Requests and Jobs in VOS (UI-driven)
+The goal is to establish a clear understanding of how the current system behaves so that the future bulk processing solution can replicate the required behavior without relying on manual UI steps such as “Validate Request”.
 
----
+The analysis should cover the full lifecycle from user interaction to system-generated outputs, including all required attributes, validations, and system logic.
 
-## **Type**
+Areas to be covered include:
 
-Epic / Feature (depending on your board)
+* Request creation process:
 
----
+  * Required fields and attributes for creating a valid request
+  * Default values and auto-populated fields
+  * Form-level JavaScript logic influencing request data
+  * Any hidden or system-driven attributes
 
-## **Description**
+* Validation logic:
 
-As part of Welsh Revaluation data enhancement activities, the system must support **bulk creation of Data Enhancement requests and jobs directly within VOS**, removing the need for manual job creation.
+  * What happens during “Validate Request”
+  * Which rules are applied (client-side vs server-side)
+  * Whether validation calls Custom APIs or plugins
+  * What minimum criteria are required for job creation
 
-This capability will allow users to:
+* Job creation logic:
 
-* search and select multiple hereditaments (e.g. via postcode/address)
-* trigger bulk creation of requests and jobs
-* assign work to a manager/team
-* process jobs via the standard VOS workflow
+  * How the system creates a **Data Enhancement job**
+  * Which component triggers job creation (plugin / API / flow)
+  * What data is passed from request to job
+  * How job type influences behavior
 
-This replaces reliance on spreadsheet-based approaches and ensures work is managed entirely within VOS.
+* Request ↔ Job linkage:
 
----
+  * How the job is linked back to the request
+  * Any additional related records created
+  * Relationship structure between entities
 
-## **Business Context**
+* Status and lifecycle:
 
-Currently:
+  * Initial statuses for request and job
+  * Any transitions triggered automatically
+  * BPF (if applicable) or stage initialization
 
-* Creating a single request/job takes ~7–8 minutes
-* Large volumes (1000s of properties) make manual creation inefficient
+* Team allocation and routing:
 
-Target:
+  * How jobs are assigned to teams
+  * Rules/configurations used for routing (job type, location, BA, etc.)
+  * Any Power Automate or plugin logic involved
+  * Whether assignment is automatic or manual at this stage
 
-* Enable **bulk creation (100–1000 records at once)**
-* Maintain:
+* Additional considerations:
 
-  * auditability
-  * QA process
-  * existing job lifecycle
+  * Any dependencies on PAD, hereditament, or related entities
+  * Any constraints or validations specific to Data Enhancement
+  * Performance or system limitations observed in current flow
 
----
-
-## **Scope**
-
-### ✅ In Scope
-
-* UI-based selection of properties (postcode/address search)
-* Multi-select of hereditaments (with limit)
-* Bulk creation of:
-
-  * Request
-  * Data Enhancement Job
-* Assignment to:
-
-  * Manager / Team queue
-* Asynchronous processing
-
----
-
-### ❌ Out of Scope
-
-* PAD updates via bulk upload
-* Auto-completion of jobs
-* Spreadsheet-based processing (future fallback only)
-* Changes to existing job lifecycle
-
----
-
-## **High-Level Flow**
-
-```text
-Search properties → Select (max limit) → Provide required fields
-→ Submit → Background processing → Requests & Jobs created
-→ Assigned → Caseworker picks from queue
-```
-
----
-
-## **Acceptance Criteria**
-
-1. User can search properties using postcode/address
-2. User can select multiple hereditaments (with max limit enforced)
-3. User can provide required inputs (e.g. assignment)
-4. System creates:
-
-   * 1 request per hereditament
-   * 1 job per hereditament
-5. Jobs are assigned correctly (team/manager)
-6. Processing is asynchronous (no UI blocking)
-7. System provides success/failure feedback
-8. No impact to existing VOS job lifecycle
-
----
-
-## **Dependencies**
-
-* Confirmation of mandatory fields for request creation
-* Data source for property search (PostgreSQL / VOS lookup)
-* Assignment routing rules (Michelle team)
-
----
-
-## **Risks**
-
-* Performance impact for large batches
-* Incorrect mandatory field handling
-* Duplicate job creation
-
----
-
----
-
-# 🔧 🧠 SUBTASK (TECH INVESTIGATION)
-
-## **Title**
-
-Technical Investigation – Bulk Job Creation Capability in VOS
-
----
-
-## **Type**
-
-Technical Spike / Investigation
-
----
-
-## **Description**
-
-Investigate and define the technical approach to implement bulk creation of Data Enhancement requests and jobs within VOS.
-
-The solution is expected to support UI-driven selection (PCF/custom page) and asynchronous processing.
-
----
-
-## **Objectives**
-
-1. Identify how requests and jobs are currently created in VOS
-2. Define reusable API/payload for bulk creation
-3. Evaluate UI approach (PCF vs Custom Page)
-4. Define async processing mechanism
-5. Identify mandatory fields and validation rules
-6. Assess performance limits and batching strategy
-
----
-
-## **Key Investigation Areas**
-
-### 🔹 1. Request & Job Creation Flow
-
-* Existing entities:
-
-  * Request
-  * Job
-* Plugins / Custom APIs involved
-* Mandatory fields required
-
----
-
-### 🔹 2. UI Approach
-
-* PCF control vs Custom Page
-* Capability:
-
-  * search
-  * multi-select
-  * max selection limit
-
----
-
-### 🔹 3. Data Source for Property Search
-
-* PostgreSQL (PAD store)
-* Existing “Find Address” lookup
-* DAP2 API possibility
-
----
-
-### 🔹 4. Bulk Processing Strategy
-
-* Async plugin vs Azure Function
-* Queue-based processing
-* Batch size handling (e.g. 1000 records)
-
----
-
-### 🔹 5. API / Payload Design
-
-Define reusable payload:
-
-```json
-{
-  "hereditamentIds": [],
-  "jobType": "DataEnhancement",
-  "assignedTo": "manager/team",
-  "metadata": {}
-}
-```
-
----
-
-### 🔹 6. Validation Rules
-
-* Mandatory fields
-* Property existence
-* Duplicate detection
-
----
-
-### 🔹 7. Assignment Logic
-
-* Queue vs Manager
-* Alignment with existing routing
-
----
-
-### 🔹 8. Error Handling
-
-* Partial success
-* Failure reporting
-
----
-
-## **Deliverables**
-
-* Proposed architecture (UI + API + processing)
-* Identified mandatory fields
-* API contract (input/output)
-* Recommended approach (PCF + Async processing)
-* Risks and limitations
-* Effort estimation (tactical vs strategic)
-
----
-
-## **Definition of Done**
-
-* Technical approach documented
-* Dependencies identified
-* Architecture agreed with stakeholders (incl. Mark)
-* Ready for detailed design / implementation
-
----
-
-# 🎯 Final Insight (for your discussion)
-
-👉 Main task = **Business capability (what we are building)**
-👉 Subtask = **How we build it (tech spike)**
-
----
-
-
-
-Just tell 👍
+The outcome should be a clear, structured documentation of the current-state process that can be used as a baseline for designing and implementing the **Bulk Work Processor**, ensuring that request and job creation can be automated correctly without relying on manual intervention.
