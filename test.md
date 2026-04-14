@@ -1,179 +1,69 @@
-Here are **clear, HMRC-style Jira tasks** specifically for a **Dynamics (Dataverse) developer** based on your VSC requirement 👇
+**Tech Team Questions**
+- What is the final server-side pattern: `Custom API + plugin`, `async plugin`, or `plugin + queue`?
+- What is the expected max batch size in one submit action: 100, 1,000, 5,000, or more?
+- Do we create one `Bulk Processor` parent record and child `Batch Item` records for every row?
+- Which tables are needed in Dataverse: `Bulk Processor`, `Batch Item`, `Request`, `Job`?
+- What are the exact logical names and lookup relationships between those tables?
+- Should Request and Job be created in the same transaction or split into separate steps?
+- How do we handle partial success, retry, and failed items?
+- Do we need async processing for all batches or only above a threshold?
+- What is the status model for a batch: Draft, Queued, Processing, Partial Success, Completed, Failed?
+- What audit fields and progress counts need to be stored on the batch?
+- How should the plugin receive input from PCF and CSV so both use the same pipeline?
+- Is there any need for batch locking to prevent duplicate submissions?
+- How should assignment work: queue, team, manager, or configurable routing?
+- What are the performance constraints or expected response time for the UI?
+- Do we need a progress endpoint so the UI can refresh batch status after submission?
 
----
+**Client Questions**
+- Do you want the user to start with **PCF selection**, **CSV upload**, or both?
+- Which is the preferred way to find hereditaments: address, postcode, billing authority, UPRN, or all of them?
+- What is the preferred assignment target: team queue, manager, or configurable routing?
+- What is the maximum batch size the business wants to work with?
+- Do you want the batch to run immediately or in the background?
+- Do you want the user to see the created requests and jobs straight away, or only after processing completes?
+- What should happen when some rows fail validation but others are valid?
+- Do you want failed rows to block the whole batch, or allow partial success?
+- Should CSV and PCF produce the same final result and same downstream process?
+- Do you need the ability to rerun or amend a failed batch?
+- Do you want batch totals visible on the form, for example selected, valid, invalid, requests created, jobs created?
+- Should the batch include a record of who submitted it and when?
 
-## 🧾 **Task 1: Analyse Current VSC Implementation in PAD Flow**
+**BA Questions**
+- What is the exact business outcome for Bulk Processor?
+- Is the goal to create requests only, jobs only, or both together?
+- What is the difference between a batch, a request, and a job in business terms?
+- What does “successful” bulk creation mean to the business?
+- What is the minimum data required for a row to be accepted?
+- What business rules define a valid hereditament selection?
+- What should happen to duplicates, missing values, and conflicting rows?
+- Should the batch be able to mix multiple search methods or only one per batch?
+- What is the expected user journey from finding hereditaments to seeing the resulting work?
+- What should the user do when a row is marked for review?
+- How should the team pick up the created jobs after bulk creation?
+- What reporting or audit trail does the business need after submission?
+- Is the requirement only for data enhancement, or should the design support other job types later?
+- What is in scope for phase 1 versus phase 2?
+- Is this a tactical solution first, with a strategic UI later?
 
-### **Description**
+**Things to Consider**
+- Keep one backend pipeline for both PCF and CSV.
+- Avoid direct browser-side creation of Request and Job records.
+- Use asynchronous processing for large batches.
+- Design for partial success instead of all-or-nothing failure.
+- Store row-level status so failed items can be reviewed and retried.
+- Make the batch parent record the audit and progress container.
+- Keep the UI simple: search, select, submit, then monitor.
+- Decide early whether the batch limit is a hard cap or a soft warning.
+- Make the status model visible to the user.
+- Ensure the data model can support future bulk types, not only data enhancement.
+- Confirm how assignment works before implementing the workflow.
+- Define how the UI shows “created”, “queued”, “review”, and “failed”.
+- Validate CSV structure before the batch is submitted.
+- Make the table columns consistent across PCF and CSV paths.
+- Plan for performance when the volume grows from 1,000 to many thousands.
 
-Perform a detailed technical analysis of how **VSC (Valuation Scenario Code)** is currently implemented within the PAD (Property Attribute Data) workflow in Dynamics.
-
-The objective is to understand:
-
-* How VSC codes are stored and retrieved (reference data / virtual tables / Dataverse entities)
-* How VSC is surfaced in the PAD UI (forms, subgrids, controls)
-* How VSC values are saved and associated with the NDA/PAD attribute set
-* Whether there are any dependencies between:
-
-  * Dwelling Group
-  * Dwelling Type
-  * VSC Code
-* How the **VSC factor** is handled:
-
-  * Default value behaviour (e.g., default = 1)
-  * Any plugin, JavaScript, or PCF logic modifying it
-* API/DAL interaction:
-
-  * Identify the API calls used to persist and retrieve VSC codes
-  * Understand how VSC is linked to PAD records via NDA Set ID
-
-Deliverables:
-
-* Summary of current VSC data model and flow
-* List of impacted components (forms, JS, plugins, APIs, virtual entities)
-* Confirmation whether VSC is purely reference-data-driven or has custom logic dependencies
-
----
-
-## 🧾 **Task 2: Validate and Enable New VSC Codes in PAD UI**
-
-### **Description**
-
-Ensure that newly introduced VSC codes (e.g., student cluster accommodation, agriculture variants, leisure/retail composites, annex/parent, cladding-related codes) are correctly surfaced and usable within the existing PAD workflow in Dynamics.
-
-Activities include:
-
-* Verify that new VSC codes added in reference/master data are:
-
-  * Available in the VSC selection control in PAD forms
-  * Correctly displayed with code and description
-* Validate that users can:
-
-  * Select new VSC codes
-  * Save them against PAD records
-  * Retrieve them correctly on reload
-* Confirm that VSC codes are:
-
-  * Properly associated with NDA attribute sets
-  * Persisted through existing API/DAL integration
-* Ensure no UI or validation issues occur when selecting new VSC codes
-
-Also verify:
-
-* No unintended restrictions exist on VSC selection (e.g., filtering by dwelling group/type)
-* Existing behaviour remains unchanged for current VSC codes
-
-Deliverables:
-
-* Validation results confirming end-to-end functionality
-* List of any required configuration or code fixes
-* Screenshots or evidence of successful VSC selection and persistence
-
----
-
-## 🧾 **Task 3: Review and Validate VSC Factor Handling in Dynamics**
-
-### **Description**
-
-Analyse and validate how the **VSC factor** is handled within Dynamics and confirm whether any changes are required to support new VSC codes.
-
-Activities:
-
-* Identify where the VSC factor is:
-
-  * Stored (reference data / virtual table / API response)
-  * Displayed in the UI (if applicable)
-* Review current behaviour:
-
-  * Default factor value (e.g., set to 1)
-  * Any logic in:
-
-    * Plugins
-    * JavaScript
-    * PCF controls
-* Validate whether:
-
-  * Factor is editable by users
-  * Factor is overridden or recalculated anywhere in the system
-* Confirm that new VSC codes:
-
-  * Can carry factor values from reference data
-  * Do not break existing behaviour
-
-Note:
-No changes should be made unless explicitly required by business rules.
-
-Deliverables:
-
-* Technical note on current factor handling
-* Confirmation whether changes are required or not
-* Identification of any risks or inconsistencies
-
----
-
-## 🧾 **Task 4: Assess Impact and Approach for VSC Backfill on Existing PAD Records**
-
-### **Description**
-
-Assess how existing PAD records can be updated (backfilled) with new or revised VSC codes and identify the appropriate technical approach within Dynamics.
-
-Activities:
-
-* Analyse how VSC is currently stored against PAD/NDA records
-* Identify:
-
-  * Whether existing PAD records can be updated via:
-
-    * Data Enhancement jobs
-    * Direct data update (script/API)
-* Evaluate impact on:
-
-  * Existing PAD records
-  * Audit/history behaviour
-  * Validation and release process
-* Confirm whether Dynamics supports bulk update through:
-
-  * Existing workflows
-  * APIs
-  * Or requires external data migration
-
-Deliverables:
-
-* Recommended approach for backfill (Dynamics vs external script)
-* List of impacted entities and fields
-* Risks and constraints (e.g., validation dependencies, release process)
-
----
-
-## 🧾 **Task 5: Validate End-to-End PAD Save and Release Behaviour with New VSC Codes**
-
-### **Description**
-
-Ensure that introducing new VSC codes does not impact the existing PAD lifecycle, including validation, progression, and release.
-
-Activities:
-
-* Create/update PAD records with new VSC codes
-* Validate:
-
-  * PAD validation step (pass/fail/warnings)
-  * Progression through stages (e.g., research → validation → release)
-* Confirm that:
-
-  * VSC codes persist through all stages
-  * Associated child records (VSC, source code, remarks) are correctly released
-* Verify behaviour for:
-
-  * “No Action” scenarios (if PAD is not fully processed)
-  * Reopening and editing PAD records
-
-Deliverables:
-
-* Test results confirming no regression in PAD lifecycle
-* Identification of any issues or required fixes
-
----
-
-If you want next step, I can also:
-👉 break these into **subtasks (plugin / JS / DAL / testing split)**
-👉 or map them to **solution layers (Dynamics vs DAL vs DAP2)** for your design discussion 🚀
+If you want, I can turn this into:
+1. a client workshop agenda,
+2. a tech discovery checklist,
+3. or a BA-ready question sheet in a cleaner format.
