@@ -4,9 +4,9 @@ I want the server-side shape to stay simple, predictable, and easy to support.
 
 My preferred flow is:
 
-**PCF -> Custom API -> Plugin logic -> SharePoint upload -> Dataverse update**
+**PCF -> Custom API -> Plugin validation -> Backend integration service -> SharePoint upload -> Plugin Dataverse update**
 
-For orchestration, I want **Azure Function** rather than Power Automate. Azure Function is a better long-term fit for reliability, retry control, chunked processing, and monitoring.
+I want **Azure Function** to handle orchestration rather than Power Automate. Azure Function is a better long-term fit for reliability, retry control, chunked processing, and monitoring.
 
 ---
 
@@ -16,8 +16,9 @@ For orchestration, I want **Azure Function** rather than Power Automate. Azure F
 
 - PCF stays thin and only handles user interaction.
 - Custom API is the entry point from the UI.
-- Plugins perform the server-side work where transaction safety matters.
+- Plugins perform the synchronous validation and Dataverse update work where transaction safety matters.
 - Dataverse remains the system of record.
+- A backend integration service performs the SharePoint file transfer.
 - Azure Function owns orchestration and background processing.
 
 ### What I do not want
@@ -57,8 +58,16 @@ Plugins should handle:
 - synchronous validation
 - record locking
 - status enforcement
-- SharePoint upload
+- updating Bulk Processor file metadata after a successful upload response
 - Dataverse updates that must happen as part of the same operation
+
+### Backend integration service
+
+The backend integration service should handle:
+
+- the actual SharePoint upload
+- folder creation and file transfer
+- returning file metadata back to the plugin
 
 ### Azure Function
 
@@ -85,8 +94,8 @@ This is the main upload API.
 
 - accept the file from PCF
 - validate the file and batch context
-- upload the file into the correct SharePoint folder
-- update the Bulk Processor with file metadata
+- call the backend integration service to upload the file
+- update the Bulk Processor with file metadata from the service response
 - return the upload result
 
 ### Why this should stay as one API
@@ -96,7 +105,7 @@ I do not want upload and Bulk Processor update split into separate APIs.
 If they are split, I create a failure gap where:
 
 1. upload succeeds
-2. Bulk Processor update fails
+2. plugin update of the Bulk Processor fails
 
 That creates inconsistency and extra support overhead.
 
@@ -117,9 +126,9 @@ That creates inconsistency and extra support overhead.
 2. Validate that the batch is eligible for upload.
 3. Validate that `Source Type = CSV`.
 4. Validate that the file extension is `.csv`.
-5. Build the SharePoint folder path for the batch.
-6. Upload the file to SharePoint.
-7. Update Bulk Processor fields:
+5. Build or request the SharePoint folder path for the batch.
+6. Call the backend integration service to upload the file.
+7. Update Bulk Processor fields from the returned metadata:
    - `voa_filereference`
    - `voa_filesharepointid`
    - `voa_fileoriginalname`
@@ -137,113 +146,6 @@ That creates inconsistency and extra support overhead.
   "sharePointFileId": "SP-998877",
   "fileName": "london-intake.csv",
   "message": "File uploaded successfully"
-}
-```
-
----
-
-## 3.2 `voa_CreateBulkProcessorItems`
-
-This API handles line staging and should stay separate from file upload.
-
-### Purpose
-
-- create Bulk Processor Item records
-- apply staging validation
-- mark rows as Valid, Invalid, or Duplicate
-- update Bulk Processor summary counts
-
-### Suggested input
-
-```json
-{
-  "bulkProcessorId": "BP-20260415-003",
-  "sourceType": "PCF",
-  "items": [
-    {
-      "sourceValue": "SSU-200101",
-      "ssuId": "SSU-200101",
-      "sourceRowNumber": null
-    },
-    {
-      "sourceValue": "SSU-200102",
-      "ssuId": "SSU-200102",
-      "sourceRowNumber": null
-    }
-  ]
-}
-```
-
-### Plugin responsibilities
-
-1. Validate the batch.
-2. Validate item values.
-3. Create Bulk Processor Item rows.
-4. Set item status:
-   - Pending
-   - Valid
-   - Invalid
-   - Duplicate
-5. Update batch counts.
-6. Optionally move the batch to `Items Created`.
-
----
-
-## 3.3 `voa_CreateRequestAndJobFromBulkProcessorItem`
-
-This is the processing API.
-
-### Purpose
-
-- pick one staged item
-- validate business rules
-- create Request
-- create Job
-- link the two records
-- update item status and result
-
-### Suggested input
-
-```json
-{
-  "bulkProcessorItemId": "BPI-B-005",
-  "processingRunId": "RUN-20260415-02"
-}
-```
-
-### Plugin responsibilities
-
-1. Validate that the item is eligible.
-2. Resolve assignment.
-3. Create Request.
-4. Create Job.
-5. Link the records.
-6. Update item status.
-7. Return success or failure.
-
-### Suggested failure output
-
-```json
-{
-  "bulkProcessorItemId": "BPI-B-005",
-  "success": false,
-  "requestId": null,
-  "jobId": null,
-  "status": "Failed",
-  "message": "Request creation failed due to missing mandatory ownership mapping"
-}
-```
-
-### Suggested success output
-
-```json
-{
-  "bulkProcessorItemId": "BPI-A-001",
-  "success": true,
-  "requestId": "REQ-60001",
-  "jobId": "JOB-70001",
-  "status": "Processed",
-  "message": "Request and Job created successfully"
 }
 ```
 
@@ -398,6 +300,7 @@ My final recommendation is:
 - keep upload and metadata update inside `voa_UploadBulkProcessorFile`
 - keep line staging inside `voa_CreateBulkProcessorItems`
 - keep final Request and Job creation inside `voa_CreateRequestAndJobFromBulkProcessorItem`
+- use a backend integration service for SharePoint upload
 - use **Azure Function** for orchestration
 - do not use Power Automate as the primary engine
 
@@ -407,6 +310,6 @@ That gives me a design that is tight enough for MVP, but still scalable later.
 
 ## 10. Recommended Summary Wording
 
-I propose that the PCF calls a dedicated upload Custom API, which handles the SharePoint folder upload and updates the Bulk Processor record with the file metadata in the same server-side operation. I would then keep Bulk Processor Item creation as a separate Custom API, and final Request and Job creation as another separate Custom API. This gives me a clean split between file upload, line staging, and final processing.
+I propose that the PCF calls a dedicated upload Custom API, which validates the request, calls a backend integration service to upload the file to SharePoint, and updates the Bulk Processor record with the returned file metadata in the same server-side operation. I would then keep Bulk Processor Item creation as a separate Custom API, and final Request and Job creation as another separate Custom API. This gives me a clean split between file upload, line staging, and final processing.
 
 Azure Function should then handle orchestration, batch pickup, retries, and summary updates rather than Power Automate.
