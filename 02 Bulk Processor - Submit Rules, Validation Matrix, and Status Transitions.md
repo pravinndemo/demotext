@@ -43,7 +43,7 @@ A batch can move to `Submitted` only if all mandatory conditions are met.
 | 3 | Lock batch for editing |
 | 4 | Set status = Submitted |
 | 5 | Set Submitted On timestamp |
-| 6 | Queue batch for processing (via flow/function) |
+| 6 | Queue batch for processing (via Azure Function) |
 
 #### What gets locked after submission
 
@@ -113,7 +113,7 @@ This defines what happens at each event.
 
 | Event | Batch picked for processing |
 |---|---|
-| Trigger | Scheduled job or function |
+| Trigger | Azure Function |
 | Validation | Status = Submitted, not already locked |
 | System Action | Set status = Processing, set Processing Started On |
 | Success Outcome | Batch moves to processing |
@@ -123,9 +123,9 @@ This defines what happens at each event.
 
 | Event | Process one Bulk Processor Item |
 |---|---|
-| Trigger | Worker picks item |
+| Trigger | Azure Function picks item |
 | Validation | Status = Valid, not locked |
-| System Action | 1. Lock item  2. Validate business rules  3. Create Request  4. Create Job  5. Link Request and Job  6. Assign Team/Manager |
+| System Action | 1. Lock item  2. Validate business rules  3. Call processing Custom API  4. Create Request  5. Create Job  6. Link Request and Job  7. Assign Team/Manager |
 | Success Outcome | Status = Processed, store Request Id / Job Id |
 | Failure Outcome | Status = Failed, store error message, increment attempt count |
 
@@ -251,3 +251,15 @@ I am ensuring no bulk synchronous processing from the UI.
 I am keeping reprocessing controlled and predictable.
 
 ---
+
+## 9. Next Step
+
+Next, I will convert this into technical implementation mapping:
+
+- which part goes into PCF
+- which part goes into Custom API
+- which part goes into Azure Function
+- API contract design
+- payload structures
+
+This will directly translate into Jira tasks for the team.
