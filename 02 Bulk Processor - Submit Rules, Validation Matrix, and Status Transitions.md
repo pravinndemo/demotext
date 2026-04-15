@@ -251,15 +251,3 @@ I am ensuring no bulk synchronous processing from the UI.
 I am keeping reprocessing controlled and predictable.
 
 ---
-
-## 9. Next Step
-
-Next, I will convert this into technical implementation mapping:
-
-- which part goes into PCF
-- which part goes into Custom API
-- which part goes into Power Automate or Azure Function
-- API contract design
-- payload structures
-
-This will directly translate into Jira tasks for the team.
