@@ -1,64 +1,106 @@
 # Bulk Processor - API and Azure Function Recommendation
 
-I want the server-side shape to stay simple and predictable.
+I want the server-side shape to stay simple, predictable, and easy to support.
 
-My preferred approach is:
+My preferred flow is:
 
-**PCF -> Custom API -> Plugin logic -> SharePoint folder upload -> Dataverse update**
+**PCF -> Custom API -> Plugin logic -> SharePoint upload -> Dataverse update**
 
-That is cleaner than letting the PCF make multiple direct calls.
-
-I also want to use **Azure Function** for orchestration instead of Power Automate, because it is a better fit for reliability, scale, and retry control.
+For orchestration, I want **Azure Function** rather than Power Automate. Azure Function is a better long-term fit for reliability, retry control, chunked processing, and monitoring.
 
 ---
 
-## 1. Recommended Server-Side Shape
+## 1. Architecture Decision
 
-### My recommendation
+### What I want
 
-I want to use **Custom API as the entry point from PCF**, and keep the actual SharePoint upload and Dataverse updates inside plugin logic behind that API.
+- PCF stays thin and only handles user interaction.
+- Custom API is the entry point from the UI.
+- Plugins perform the server-side work where transaction safety matters.
+- Dataverse remains the system of record.
+- Azure Function owns orchestration and background processing.
 
-That means:
+### What I do not want
 
-- the PCF sends one request
-- the Custom API receives it
-- the plugin performs the server-side work
-- Dataverse is updated in the same controlled flow
-
-This is cleaner than splitting the upload and update into multiple small APIs.
+- multiple direct calls from PCF to separate backend steps
+- upload and metadata update split into different APIs
+- orchestration logic embedded in the UI
+- Power Automate as the primary processing engine
 
 ---
 
-## 2. API Set
+## 2. Server-Side Responsibilities
+
+### PCF
+
+The PCF should handle:
+
+- searching and selecting records
+- displaying counts and user feedback
+- sending a single request to the backend
+
+The PCF should not handle:
+
+- file parsing
+- bulk Request / Job creation
+- long-running processing
+- authoritative validation
+
+### Custom API
+
+The Custom API should expose reusable business operations and keep the UI integration clean.
+
+### Plugins
+
+Plugins should handle:
+
+- synchronous validation
+- record locking
+- status enforcement
+- SharePoint upload
+- Dataverse updates that must happen as part of the same operation
+
+### Azure Function
+
+Azure Function should handle:
+
+- reading submitted batches
+- parsing staged CSV files
+- calling Custom APIs
+- chunking and retries
+- batch completion updates
+- processing summaries
+
+---
+
+## 3. API Design
 
 I want to keep this to **three APIs only**.
 
-### API 1 - `UploadBulkProcessorFile`
+## 3.1 `voa_UploadBulkProcessorFile`
 
 This is the main upload API.
 
-#### Purpose
+### Purpose
 
-- accept the file from the PCF
-- validate it
-- upload it into the correct SharePoint folder
+- accept the file from PCF
+- validate the file and batch context
+- upload the file into the correct SharePoint folder
 - update the Bulk Processor with file metadata
-- return the result
+- return the upload result
 
-#### I do not want to split this into separate upload and update APIs
+### Why this should stay as one API
 
-I would not create a separate `UpdateBulkProcessorAfterUpload` API for MVP.
+I do not want upload and Bulk Processor update split into separate APIs.
 
-If I split them, I create a risk where:
+If they are split, I create a failure gap where:
 
 1. upload succeeds
 2. Bulk Processor update fails
 
-That creates inconsistency.
+That creates inconsistency and extra support overhead.
 
-I want one API to own the upload transaction flow.
-
-#### Suggested input
+### Suggested input
 
 ```json
 {
@@ -69,23 +111,23 @@ I want one API to own the upload transaction flow.
 }
 ```
 
-#### What the plugin should do
+### Plugin responsibilities
 
-1. validate that the batch exists
-2. validate that the batch status allows upload
-3. validate that `Source Type = CSV`
-4. validate that the file extension is `.csv`
-5. build the SharePoint folder path for the batch
-6. upload the file to SharePoint
-7. update Bulk Processor fields:
+1. Validate that the batch exists.
+2. Validate that the batch is eligible for upload.
+3. Validate that `Source Type = CSV`.
+4. Validate that the file extension is `.csv`.
+5. Build the SharePoint folder path for the batch.
+6. Upload the file to SharePoint.
+7. Update Bulk Processor fields:
    - `voa_filereference`
    - `voa_filesharepointid`
    - `voa_fileoriginalname`
    - `voa_fileuploadedon`
    - `voa_fileuploadedby`
-8. return upload result
+8. Return the result.
 
-#### Suggested output
+### Suggested output
 
 ```json
 {
@@ -100,20 +142,18 @@ I want one API to own the upload transaction flow.
 
 ---
 
-### API 2 - `CreateBulkProcessorItems`
+## 3.2 `voa_CreateBulkProcessorItems`
 
-This API is separate and should stay separate.
+This API handles line staging and should stay separate from file upload.
 
-#### Purpose
+### Purpose
 
 - create Bulk Processor Item records
 - apply staging validation
 - mark rows as Valid, Invalid, or Duplicate
-- update summary counts on Bulk Processor
+- update Bulk Processor summary counts
 
-This API is for **line staging**, not file upload.
-
-#### Suggested input
+### Suggested input
 
 ```json
 {
@@ -134,37 +174,35 @@ This API is for **line staging**, not file upload.
 }
 ```
 
-#### What the plugin should do
+### Plugin responsibilities
 
-1. validate the batch
-2. validate item values
-3. create Bulk Processor Item rows
-4. mark status:
+1. Validate the batch.
+2. Validate item values.
+3. Create Bulk Processor Item rows.
+4. Set item status:
    - Pending
    - Valid
    - Invalid
    - Duplicate
-5. update batch counts
-6. optionally move batch to `Items Created`
+5. Update batch counts.
+6. Optionally move the batch to `Items Created`.
 
 ---
 
-### API 3 - `CreateRequestAndJobFromBulkProcessorItem`
+## 3.3 `voa_CreateRequestAndJobFromBulkProcessorItem`
 
 This is the processing API.
 
-#### Purpose
+### Purpose
 
 - pick one staged item
 - validate business rules
 - create Request
 - create Job
-- link them
+- link the two records
 - update item status and result
 
-This must stay separate from upload and staging.
-
-#### Suggested input
+### Suggested input
 
 ```json
 {
@@ -173,17 +211,17 @@ This must stay separate from upload and staging.
 }
 ```
 
-#### What the plugin should do
+### Plugin responsibilities
 
-1. validate the item is eligible
-2. resolve assignment
-3. create Request
-4. create Job
-5. link the records
-6. update item status
-7. return success or failure
+1. Validate that the item is eligible.
+2. Resolve assignment.
+3. Create Request.
+4. Create Job.
+5. Link the records.
+6. Update item status.
+7. Return success or failure.
 
-#### Suggested failure output
+### Suggested failure output
 
 ```json
 {
@@ -196,7 +234,7 @@ This must stay separate from upload and staging.
 }
 ```
 
-#### Suggested success output
+### Suggested success output
 
 ```json
 {
@@ -211,9 +249,9 @@ This must stay separate from upload and staging.
 
 ---
 
-## 3. SharePoint Folder Design
+## 4. SharePoint Storage Design
 
-I want folder-wise storage.
+I want folder-based storage for each batch.
 
 ### Recommended structure
 
@@ -227,12 +265,12 @@ I want folder-wise storage.
 /BulkProcessorUploads/BP-20260415-003/london-intake.csv
 ```
 
-That gives me:
+### Why this works
 
 - one folder per batch
 - no file name collision
 - easy support lookup
-- easy archival later
+- easier archival later
 
 ### Optional safer filename pattern
 
@@ -244,38 +282,40 @@ I would still keep the original file name in Dataverse.
 
 ---
 
-## 4. Important Caution on File Upload Through Custom API
+## 5. File Upload Constraint
 
-This approach is valid, but I need to keep one practical limitation in mind:
+I want to be explicit about one practical constraint.
 
-### Large file payloads are not ideal
+### Large payloads are not ideal through Custom API
 
-If the PCF sends file content as base64 or string payload to Dataverse plugin logic, then:
+If the PCF sends file content as base64 or a large string payload to Dataverse plugin logic, then:
 
-- payload size matters
-- large files become painful
+- payload size becomes a concern
+- large files become harder to support
 - debugging becomes harder
 
-So I think this is fine for:
+### My MVP assumption
+
+This approach is acceptable for:
 
 - CSV only
 - controlled small or medium files
-- MVP batch sizes
+- limited MVP batch sizes
 
-### My MVP limit
+### My preferred MVP guardrails
 
-I would set a sensible file limit for MVP, for example:
-
-- 1 MB or 2 MB max
+- 1 MB or 2 MB max file size
 - fixed CSV template only
+- one upload per batch
+- upload allowed only while batch is Draft
 
-For larger files later, I would move upload handling to a dedicated Azure endpoint instead of pushing large base64 through Custom API.
+If I need large-file support later, I would move file handling to a dedicated Azure endpoint instead of pushing large base64 payloads through Custom API.
 
 ---
 
-## 5. Azure Function for Orchestration
+## 6. Azure Function Orchestration
 
-I want **Azure Function** to be the orchestration layer rather than Power Automate.
+I want Azure Function to own orchestration instead of Power Automate.
 
 ### Why Azure Function
 
@@ -283,8 +323,8 @@ I want:
 
 - better reliability
 - better retry control
-- better chunked processing
-- better support for larger volumes
+- better support for chunked processing
+- better handling of larger volumes
 - cleaner long-term maintenance
 
 ### Azure Function responsibilities
@@ -292,62 +332,35 @@ I want:
 - read submitted batches
 - process only eligible items
 - handle item locking
-- call `CreateBulkProcessorItems` for parsed CSV rows
-- call `CreateRequestAndJobFromBulkProcessorItem` for each staged item
+- read CSV files from SharePoint
+- call `voa_CreateBulkProcessorItems`
+- call `voa_CreateRequestAndJobFromBulkProcessorItem`
 - update summary counts
 - move the batch to `Completed`, `Partially Failed`, or `Failed`
 
 ### Azure Function should not
 
-- duplicate core business rules already handled by Custom API or plugins
-- create a second copy of validation logic
-- become the place where business rules are spread out and difficult to test
-
----
-
-## 6. Recommended API Set
-
-I want to keep the solution small and focused.
-
-### API 1 - `voa_UploadBulkProcessorFile`
-
-Purpose:
-
-- upload CSV to SharePoint
-- update Bulk Processor file metadata
-
-### API 2 - `voa_CreateBulkProcessorItems`
-
-Purpose:
-
-- create staged child items
-- apply staging validation
-
-### API 3 - `voa_CreateRequestAndJobFromBulkProcessorItem`
-
-Purpose:
-
-- process one child item into Request and Job
-
-That is enough for MVP.
+- duplicate business rules already enforced by plugins or Custom API
+- become a second copy of validation logic
+- scatter processing behaviour across multiple places
 
 ---
 
 ## 7. What the PCF Should Call
 
-### For the CSV route
+### CSV route
 
-1. call `voa_UploadBulkProcessorFile`
-2. show the uploaded file result
-3. let Azure Function or a follow-up server step handle parsing and item staging
+1. Call `voa_UploadBulkProcessorFile`.
+2. Show the upload result.
+3. Let Azure Function handle parsing and item staging.
 
-### For the PCF selection route
+### PCF selection route
 
-1. call `voa_CreateBulkProcessorItems`
+1. Call `voa_CreateBulkProcessorItems`.
 
-### For the processing route
+### Processing route
 
-Not PCF.
+The PCF should not call processing directly.
 
 Azure Function should call:
 
@@ -355,11 +368,11 @@ Azure Function should call:
 
 ---
 
-## 8. When Do Rows Get Created?
+## 8. When Rows Are Created
 
-I still want to keep parsing separate from upload.
+I want parsing to stay separate from upload.
 
-### My preferred flow
+### Preferred flow
 
 1. `voa_UploadBulkProcessorFile`
 2. Azure Function reads the SharePoint file
@@ -377,27 +390,18 @@ I still want to keep parsing separate from upload.
 
 ---
 
-## 9. My Final Recommendation
+## 9. Final Recommendation
 
-Yes, I want to use plugin and Custom API, but I want the design to stay tight:
+My final recommendation is:
 
-### Use 3 APIs only
+- use **3 APIs only**
+- keep upload and metadata update inside `voa_UploadBulkProcessorFile`
+- keep line staging inside `voa_CreateBulkProcessorItems`
+- keep final Request and Job creation inside `voa_CreateRequestAndJobFromBulkProcessorItem`
+- use **Azure Function** for orchestration
+- do not use Power Automate as the primary engine
 
-- `voa_UploadBulkProcessorFile`
-- `voa_CreateBulkProcessorItems`
-- `voa_CreateRequestAndJobFromBulkProcessorItem`
-
-### Do not create a separate update-after-upload API
-
-That should happen inside `voa_UploadBulkProcessorFile`.
-
-### Keep parsing separate from upload
-
-That will make the solution much easier to manage.
-
-### Use Azure Function instead of Power Automate
-
-I want Azure Function to own orchestration because it is a better fit for reliability and growth.
+That gives me a design that is tight enough for MVP, but still scalable later.
 
 ---
 
@@ -405,4 +409,4 @@ I want Azure Function to own orchestration because it is a better fit for reliab
 
 I propose that the PCF calls a dedicated upload Custom API, which handles the SharePoint folder upload and updates the Bulk Processor record with the file metadata in the same server-side operation. I would then keep Bulk Processor Item creation as a separate Custom API, and final Request and Job creation as another separate Custom API. This gives me a clean split between file upload, line staging, and final processing.
 
-Azure Function should then handle orchestration, batch pickup, retries, and summary updates instead of Power Automate.
+Azure Function should then handle orchestration, batch pickup, retries, and summary updates rather than Power Automate.
