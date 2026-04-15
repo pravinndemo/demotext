@@ -245,11 +245,17 @@ Azure Function handles:
 - parsing staged CSV files
 - processing only eligible items
 - item locking
-- calling Custom APIs for each item
+- calling Dataverse Custom APIs for each item
 - chunking and retries
 - batch completion updates
 - processing summaries
 - moving batch to Completed, Partially Failed, or Failed
+
+#### Important rule
+
+Azure Function does not call plugins directly.
+
+It calls Dataverse Custom APIs, and the plugin logic runs inside Dataverse as part of that Custom API execution.
 
 ---
 
@@ -336,6 +342,7 @@ The backend integration service handles the actual SharePoint file transfer.
 | Update batch summary counts | Yes | Or via helper logic |
 | Recalculate statuses | Yes | Or via helper logic |
 | Implement core Request / Job business rules | No | Should stay in server-side business layer |
+| Call plugins directly | No | Azure Function calls Dataverse Custom APIs instead |
 
 ---
 
