@@ -75,10 +75,16 @@ Azure Function should handle:
 
 - reading submitted batches
 - parsing staged CSV files
-- calling Custom APIs
+- calling Dataverse Custom APIs
 - chunking and retries
 - batch completion updates
 - processing summaries
+
+### Important rule
+
+Azure Function does not call plugins directly.
+
+It calls Dataverse Custom APIs, and the plugin logic runs inside Dataverse when those Custom APIs execute.
 
 ---
 
