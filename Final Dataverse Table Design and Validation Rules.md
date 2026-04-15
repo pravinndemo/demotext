@@ -1,4 +1,3 @@
-```md
 # Bulk Processor: Final Dataverse Table Design and Validation Rules
 
 I am freezing the **core Dataverse design** first, before moving on to UI and orchestration.
@@ -162,6 +161,7 @@ Stores one row per selected or uploaded hereditament / SSU, including validation
 | Cancelled | Optional future state if business wants manual cancellation |
 
 #### Recommended MVP statuses
+
 For MVP, use:
 
 - Draft
@@ -186,6 +186,7 @@ For MVP, use:
 | Failed | Processing attempted but failed |
 
 #### Recommended MVP item statuses
+
 For MVP, use:
 
 - Pending
@@ -552,5 +553,3 @@ Leave flexible for later:
 “We now have a fixed Dataverse design with one batch header table and one child line table. The header tracks the overall batch and counts, while the child table tracks each selected or uploaded item individually. We have also separated validation into staging validation and processing validation, so business users can clearly see whether a row failed before processing or failed later during Request and Job creation.”
 
 ---
-
-```
