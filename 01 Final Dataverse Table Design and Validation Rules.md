@@ -26,6 +26,8 @@ This version focuses on:
 6. Track batch-level outcome and line-level outcome separately.
 7. Allow partial success.
 8. Keep the first release simple, but make it extensible.
+9. Use Dataverse Custom APIs as the server-side entry point from PCF and Azure Function.
+10. Keep SharePoint upload outside Dataverse, with the plugin updating file metadata from the upload response.
 
 ---
 
@@ -52,7 +54,10 @@ Stores the overall batch, source, ownership, counts, and processing state.
 | voa_assignedteam | Assigned Team | Lookup | Conditionally Yes | Yes before submit | Bulk Processing Team | Required when assignment mode = Team |
 | voa_assignedmanager | Assigned Manager | Lookup | Conditionally Yes | Yes before submit | Sarah Jones | Required when assignment mode = Manager |
 | voa_filereference | File Reference | Text / URL (500) | No | System | sharepoint://bulk/batch-a-clean.csv | Only relevant for CSV |
+| voa_filesharepointid | SharePoint File Id | Text (100) | No | System | SP-998877 | Returned by backend integration service |
 | voa_fileoriginalname | File Original Name | Text (255) | No | System | batch-a-clean.csv | Helpful for support |
+| voa_fileuploadedon | File Uploaded On | Date and Time | No | System | 2026-04-15 20:00 | Set after successful upload |
+| voa_fileuploadedby | File Uploaded By | Lookup (User) | No | System | John Smith | Set after successful upload |
 | voa_totalitemcount | Total Item Count | Whole Number | Yes | System | 5 | Total child items |
 | voa_validitemcount | Valid Item Count | Whole Number | Yes | System | 5 | Passed staging validation |
 | voa_invaliditemcount | Invalid Item Count | Whole Number | Yes | System | 0 | Invalid rows |
@@ -456,6 +461,17 @@ Use both:
 - lookup fields to real Request / Job records
 - optional text copy of Request Id / Job Id for reporting and support
 
+### Runtime ownership note
+
+This table design stays in Dataverse, but the runtime flow is split across multiple layers:
+
+- PCF calls a Dataverse Custom API
+- the plugin validates the request and updates Dataverse records
+- the backend integration service uploads files to SharePoint
+- Azure Function calls Dataverse Custom APIs for staged processing
+
+This keeps the data model clean and keeps orchestration out of the table design itself.
+
 ---
 
 ## 14. Recommended Business Rules / Plugin Rules
@@ -477,6 +493,7 @@ Use server-side validation for:
 - count updates
 - request / job creation checks
 - processing state transitions
+- file upload metadata updates after the backend integration service returns its result
 
 ---
 
@@ -553,3 +570,15 @@ Leave flexible for later:
 “We now have a fixed Dataverse design with one batch header table and one child line table. The header tracks the overall batch and counts, while the child table tracks each selected or uploaded item individually. We have also separated validation into staging validation and processing validation, so business users can clearly see whether a row failed before processing or failed later during Request and Job creation.”
 
 ---
+
+## 18. Implementation Touchpoints
+
+This is the runtime split I am using with this table design:
+
+- PCF calls Dataverse Custom APIs
+- Custom APIs trigger plugin-backed validation and record updates
+- the backend integration service handles SharePoint file upload
+- the plugin writes the returned file metadata back to `Bulk Processor`
+- Azure Function calls Dataverse Custom APIs for staged item processing
+
+That keeps the data model clean and keeps orchestration out of the table design itself.
