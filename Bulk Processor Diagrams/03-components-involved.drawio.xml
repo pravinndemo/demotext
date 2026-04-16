@@ -1,0 +1,37 @@
+<mxfile host="app.diagrams.net" modified="2026-04-16T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="components" name="Components Involved">
+    <mxGraphModel dx="1800" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="2" value="Model-driven App&#xa;Host shell, commands, grid" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="60" y="80" width="240" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="3" value="PCF&#xa;Search, selection, upload trigger" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="360" y="80" width="240" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="4" value="Custom API Layer&#xa;Upload / Stage / Process" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="660" y="80" width="240" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="5" value="Dataverse Plugins&#xa;Validation, locking, status rules" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="960" y="80" width="240" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="6" value="Backend Integration Service&#xa;SharePoint upload only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="80" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="7" value="Azure Function&#xa;Orchestration, retries, chunking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="210" y="260" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="8" value="Dataverse Tables&#xa;Bulk Processor&#xa;Bulk Processor Item&#xa;Request / Job" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="560" y="260" width="300" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="9" value="SharePoint&#xa;Batch folders and CSV storage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="960" y="260" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="10" value="Support / Monitoring&#xa;Logs, counts, errors, retries" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="260" width="260" height="100" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
