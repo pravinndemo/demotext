@@ -1,0 +1,103 @@
+<mxfile host="app.diagrams.net" modified="2026-04-17T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="end-to-end-swimlane" name="End To End Swimlane">
+    <mxGraphModel dx="1900" dy="980" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1900" pageHeight="980" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="2" value="User / Admin" style="swimlane;childLayout=stackLayout;horizontal=1;startSize=28;rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fbff;strokeColor=#7f8c8d;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="1780" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="3" value="PCF / Dataverse" style="swimlane;childLayout=stackLayout;horizontal=1;startSize=28;rounded=1;whiteSpace=wrap;html=1;fillColor=#fcfbf6;strokeColor=#7f8c8d;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="245" width="1780" height="210" as="geometry"/>
+        </mxCell>
+        <mxCell id="4" value="Azure Function / Backend" style="swimlane;childLayout=stackLayout;horizontal=1;startSize=28;rounded=1;whiteSpace=wrap;html=1;fillColor=#fbf7fc;strokeColor=#7f8c8d;fontStyle=1;align=left;spacingLeft=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="480" width="1780" height="220" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="5" value="Open Bulk Processor form" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="90" y="90" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="6" value="Fill batch details&#xa;job type, team, input mode" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="320" y="90" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="7" value="Use PCF&#xa;select items or upload CSV" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="600" y="90" width="220" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="8" value="Review staged batch&#xa;submit when ready" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="870" y="90" width="200" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="9" value="PCF selection path&#xa;selected items staged" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="90" y="300" width="210" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="10" value="CSV upload path&#xa;store file reference only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="340" y="300" width="220" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="11" value="Create / update Bulk Processor&#xa;and Bulk Processor Item" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="610" y="300" width="260" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="12" value="Update counts, validation status,&#xa;file reference and submit state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="910" y="300" width="280" height="75" as="geometry"/>
+        </mxCell>
+        <mxCell id="13" value="Nightly timer trigger" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="90" y="540" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="14" value="Read file or staged rows&#xa;run basic validation checks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="320" y="540" width="230" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="15" value="Store file in SharePoint / Blob&#xa;staging metadata retained in Dataverse" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="590" y="540" width="280" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="16" value="Create Request and Job&#xa;associate Job to Team" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="920" y="540" width="240" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="17" value="Update Bulk Processor and&#xa;Bulk Processor Item outcomes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="540" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="18" value="Completed / Partially Failed / Failed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="1480" y="540" width="240" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="19" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="20" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="21" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="7" target="8">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="22" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="8" target="13">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="23" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="13" target="14">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="24" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="14" target="15">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="25" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="15" target="16">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="26" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="16" target="17">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="27" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="17" target="18">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="28" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="7" target="11">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="29" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="11" target="12">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="30" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="9" target="11">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="31" style="endArrow=block;html=1;strokeColor=#666666;" edge="1" parent="1" source="10" target="11">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
