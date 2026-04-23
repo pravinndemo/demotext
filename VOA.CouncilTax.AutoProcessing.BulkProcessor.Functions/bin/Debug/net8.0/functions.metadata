@@ -1,5 +1,104 @@
 [
   {
+    "name": "T_BulkDataSaveItemsHttpTrigger",
+    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
+    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Processing.T_BulkDataHttpTrigger.RunSaveItems",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "req",
+        "direction": "In",
+        "type": "httpTrigger",
+        "authLevel": "Function",
+        "methods": [
+          "post"
+        ],
+        "route": "bulk-data/save-items",
+        "properties": {}
+      },
+      {
+        "name": "$return",
+        "type": "http",
+        "direction": "Out"
+      }
+    ]
+  },
+  {
+    "name": "T_BulkDataSubmitBatchHttpTrigger",
+    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
+    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Processing.T_BulkDataHttpTrigger.RunSubmitBatch",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "req",
+        "direction": "In",
+        "type": "httpTrigger",
+        "authLevel": "Function",
+        "methods": [
+          "post"
+        ],
+        "route": "bulk-data/submit-batch",
+        "properties": {}
+      },
+      {
+        "name": "$return",
+        "type": "http",
+        "direction": "Out"
+      }
+    ]
+  },
+  {
+    "name": "T_SvtSingleHttpTrigger",
+    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
+    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Processing.T_BulkDataHttpTrigger.RunSvtSingle",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "req",
+        "direction": "In",
+        "type": "httpTrigger",
+        "authLevel": "Function",
+        "methods": [
+          "post"
+        ],
+        "route": "bulk-data/svt-single",
+        "properties": {}
+      },
+      {
+        "name": "$return",
+        "type": "http",
+        "direction": "Out"
+      }
+    ]
+  },
+  {
+    "name": "T_BulkDataTimerTrigger",
+    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
+    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Processing.T_BulkDataTimerTrigger.Run",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "myTimer",
+        "direction": "In",
+        "type": "timerTrigger",
+        "schedule": "%BulkIngestionTimerSchedule%",
+        "properties": {}
+      }
+    ]
+  },
+  {
     "name": "HttpCheckDynamicsConnection",
     "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
     "entryPoint": "VOA.CouncilTax.AutoProcessing.Helpers.Utility.HttpCheckDynamicsConnection.Run",
@@ -39,105 +138,6 @@
         "name": "request",
         "direction": "In",
         "type": "activityTrigger",
-        "properties": {}
-      }
-    ]
-  },
-  {
-    "name": "T_BulkDataSaveItemsHttpTrigger",
-    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
-    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Functions.T_BulkDataHttpTrigger.RunSaveItems",
-    "language": "dotnet-isolated",
-    "properties": {
-      "IsCodeless": false
-    },
-    "bindings": [
-      {
-        "name": "req",
-        "direction": "In",
-        "type": "httpTrigger",
-        "authLevel": "Function",
-        "methods": [
-          "post"
-        ],
-        "route": "bulk-data/save-items",
-        "properties": {}
-      },
-      {
-        "name": "$return",
-        "type": "http",
-        "direction": "Out"
-      }
-    ]
-  },
-  {
-    "name": "T_BulkDataSubmitBatchHttpTrigger",
-    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
-    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Functions.T_BulkDataHttpTrigger.RunSubmitBatch",
-    "language": "dotnet-isolated",
-    "properties": {
-      "IsCodeless": false
-    },
-    "bindings": [
-      {
-        "name": "req",
-        "direction": "In",
-        "type": "httpTrigger",
-        "authLevel": "Function",
-        "methods": [
-          "post"
-        ],
-        "route": "bulk-data/submit-batch",
-        "properties": {}
-      },
-      {
-        "name": "$return",
-        "type": "http",
-        "direction": "Out"
-      }
-    ]
-  },
-  {
-    "name": "T_SvtSingleHttpTrigger",
-    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
-    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Functions.T_BulkDataHttpTrigger.RunSvtSingle",
-    "language": "dotnet-isolated",
-    "properties": {
-      "IsCodeless": false
-    },
-    "bindings": [
-      {
-        "name": "req",
-        "direction": "In",
-        "type": "httpTrigger",
-        "authLevel": "Function",
-        "methods": [
-          "post"
-        ],
-        "route": "bulk-data/svt-single",
-        "properties": {}
-      },
-      {
-        "name": "$return",
-        "type": "http",
-        "direction": "Out"
-      }
-    ]
-  },
-  {
-    "name": "T_BulkDataTimerTrigger",
-    "scriptFile": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.dll",
-    "entryPoint": "VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Functions.T_BulkDataTimerTrigger.Run",
-    "language": "dotnet-isolated",
-    "properties": {
-      "IsCodeless": false
-    },
-    "bindings": [
-      {
-        "name": "myTimer",
-        "direction": "In",
-        "type": "timerTrigger",
-        "schedule": "%BulkIngestionTimerSchedule%",
         "properties": {}
       }
     ]
