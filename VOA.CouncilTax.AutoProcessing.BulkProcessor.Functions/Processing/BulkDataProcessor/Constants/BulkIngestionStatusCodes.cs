@@ -39,5 +39,12 @@ public static class StatusCodes
     public const int Duplicate = 358800003;      // BulkItemValidator: Duplicate detected
     public const int Processed = 358800004;      // SubmitBatch: Successfully created request/job
     public const int ItemFailed = 358800005;     // SubmitBatch or Validator: Processing failed
+
+    // Bulk Ingestion Item (voa_bulkingestionitem voa_processingstage choice field) Stage Codes
+    public const int StageStaging = 358800000;
+    public const int StageValidation = 358800001;
+    public const int StageRequestCreation = 358800002;
+    public const int StageJobCreation = 358800003;
+    public const int StageCompleted = 358800004;
 }
 

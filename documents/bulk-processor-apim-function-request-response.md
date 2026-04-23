@@ -124,7 +124,7 @@ Use `202 Accepted` because file read, parse, and staging happen asynchronously.
 - Creates `voa_requestlineitem` records for valid items.
 - For `Request and Job(s)`, creates `incident` records directly in the Azure Function and links them back to both request and bulk item.
 - Uses a bypassed request update when moving the request to its active status to avoid duplicate plugin execution.
-- For `Request Only`, keeps the request on hold without creating an incident.
+- For `Request Only`, creates the request in `In Progress` and does not create an incident.
 - Updates item and batch counters/status.
 
 ### Result Visibility

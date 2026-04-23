@@ -23,7 +23,7 @@ In this flow:
 6. Azure Function processes the request, reads the CSV from the Dataverse file column for the CSV path, and creates or updates `Bulk Processor` and `Bulk Processor Item` records in Dataverse in chunks.
 7. The user reviews the staged `Bulk Processor Item` rows and submits the `Bulk Processor` when ready.
 8. The submit path validates the staged items and creates `Request` records for valid rows.
-9. If template `Case Work Mode = Request and Job(s)`, the function creates the request, creates the `Job` directly, and performs a bypassed follow-up update on the request so the existing plugin does not create a duplicate incident. If mode = `Request Only`, the function creates the request in `On Hold`, so no job is created.
+9. If template `Case Work Mode = Request and Job(s)`, the function creates the request, creates the `Job` directly, and performs a bypassed follow-up update on the request so the existing plugin does not create a duplicate incident. If mode = `Request Only`, the function creates the request in `In Progress` and no job is created.
 10. The function updates the related `Bulk Processor` and `Bulk Processor Item` records in Dataverse and the batch is then completed, partial success, or failed depending on the processing outcome.
 
 ## Request Contracts

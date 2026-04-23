@@ -47,7 +47,7 @@ Stores the overall batch, source, ownership, counts, and processing state.
 | voa_bulkingestionid | Bulk Ingestion | Unique Identifier | Yes | System | BP-20260415-001 | Primary key |
 | voa_batchname | Batch Name | Text (200) | Yes | Yes | Batch A - Clean CSV Upload | User-friendly name |
 | voa_batchreference | Batch Reference | Autonumber | Yes | System | BATCH-00000000000000001000 | Business reference; string-prefixed number with prefix `BATCH`, minimum digits `20`, seed `1000` |
-| voa_source | Source | Choice | Yes | Yes before submit | CSV | Sync with global choice: `CSV`, `External System`, `System Entered` |
+| voa_source | Source | Choice | No (legacy) | Optional | CSV | Redundant with template `voa_format`; retained only for backward compatibility during transition |
 | voa_Template | Template | Lookup (Bulk Ingestion Template) | No | System |  | Optional template reference |
 | voa_sourcefile | Source File | File | No | System | batch-a-clean.csv | Source file captured in Dataverse file column |
 | voa_status | Status | Choice | Yes | System | Draft | Batch lifecycle |
@@ -93,7 +93,7 @@ Stores one row per selected or uploaded hereditament / SSU, including validation
 | voa_bulkingestionitemid | Bulk Ingestion Item | Unique Identifier | Yes | System | BPI-B-005 | Primary key |
 | voa_name | Item Name | Text (200) | Yes | System | BPI-B-005 - SSU-200105 | Friendly identifier |
 | voa_bulkingestion | Bulk Ingestion | Lookup | Yes | System | BP-20260415-002 | Parent batch |
-| voa_source | Source | Choice | Yes | System | CSV | Copied from parent for easier filtering |
+| voa_source | Source | Choice | Yes | System | CSV | Reference value aligned to template format / request override |
 | voa_ssuid | SSU Id | Text (100) | No / conditional | Yes before submit for manual corrections if allowed | SSU-200105 | Main identifier for MVP if used |
 | voa_hereditamentref | Hereditament Reference | Text (100) | No | Yes before submit if allowed | HER-778899 | Optional if available |
 | voa_sourcevalue | Source Value | Text (255) | Yes | System | SSU-200105 | Raw input as received |
@@ -153,13 +153,14 @@ This is the template / schema helper table for predefined ingestion formats.
 |---|---|
 | Batch Name | Always required |
 | Batch Reference | Always required and system-generated via autonumber |
-| Source | Always required |
+| Template | Required for submit |
+| Template Format (`voa_format`) | Required for submit |
 | Status | Always required |
 | Processing Job Type | Always required |
 | Assignment Mode | Always required |
 | Assigned Team | Required when Assignment Mode = Team |
 | Assigned Manager | Required when Assignment Mode = Manager |
-| File Reference | Required when Source = CSV and file is uploaded |
+| File Reference | Required when Template Format = CSV and file is uploaded |
 | Count fields | Always system-managed |
 | Submitted On / Processing dates | Only required when relevant status is reached |
 
@@ -259,6 +260,97 @@ If a parent `Bulk Ingestion` record is set to `Inactive`, all related `Bulk Inge
 
 ---
 
+## 6. April 2026 Client Alignment Check (Bulk Ingestion Item + Template)
+
+This section reflects the current Dataverse client screenshots and code usage in `BulkDataRequestProcessor` and `BulkIngestionProcessor`.
+
+### 6.1 Bulk Ingestion Item: keep in client
+
+These columns are actively used by current processing code (directly or by default env mappings) and should be kept:
+
+- `voa_ParentBulkIngestion`
+- `voa_ValidationStatus`
+- `voa_ValidationFailureReason`
+- `voa_IsDuplicate`
+- `voa_DuplicateCategory`
+- `voa_SourceValue`
+- `voa_SourceRowNumber`
+- `voa_RequestLookUp`
+- `voa_JobLookUp`
+- `voa_ProcessingAttemptCount`
+- `voa_ProcessingRunId`
+- `voa_ProcessingTimestamp`
+- `voa_Source`
+
+These columns are retained by design (reference/support fields) based on current client decisions:
+
+- `voa_RequestIdText`
+- `voa_JobIdText`
+- `voa_RawPayload`
+- `voa_CanReprocess`
+- `voa_LockedForProcessing`
+- `voa_ProcessingStage`
+
+### 6.2 Bulk Ingestion Item: candidate delete list
+
+These are not currently written/read in the active bulk-processing path and are candidates for removal from client if no Power Apps form, view, workflow, plugin, BI report, or integration depends on them:
+
+- `voa_AssignedManager`
+- `voa_AssignedTeam`
+- `voa_Hereditament`
+- `voa_HereditamentReference`
+
+### 6.2.1 `voa_ProcessingStage` choice values (client)
+
+From client configuration screenshot:
+
+- `Staging` = `358800000`
+- `Validation` = `358800001`
+- `Request Creation` = `358800002`
+- `Job Creation` = `358800003`
+- `Completed` = `358800004`
+
+### 6.3 Bulk Ingestion Template: keep in client
+
+These are used by template-driven submit behavior:
+
+- `voa_JobTypeLookup`
+- `voa_CaseWorkMode`
+- `voa_Name`
+
+These are retained in the template for reference/configuration and should be kept:
+
+- `voa_Applychangestofuturedraftlists`
+- `voa_Format` (global choice shared with Bulk Ingestion Source)
+- `voa_mapping`
+
+### 6.4 Bulk Ingestion Template: candidate delete list
+
+No template columns are currently marked for deletion from the agreed set above.
+
+### 6.4.1 Source ownership decision
+
+Current agreed design:
+
+- Template `voa_Format` is the source-of-truth for source type (`CSV`, `External System`, `System Entered`).
+- Header `voa_source` on Bulk Ingestion is redundant and should not be used by backend routing/creation logic.
+- Backend now derives source from template `voa_Format` (with request override support when explicitly provided).
+- `SubmitBatch` is rejected when template is missing or template `voa_Format` is blank.
+
+### 6.5 Safety checks before deleting in client
+
+Before deleting any candidate column, confirm no dependency exists in:
+
+- Model-driven forms and views
+- Business rules and cloud flows
+- Plugins / custom workflow activities
+- Power BI datasets and reports
+- External integrations
+
+If needed, keep columns but hide them from forms/views as an intermediate step.
+
+---
+
 ## 6. Editability Rules
 
 ### 6.1 Bulk Ingestion editability
@@ -333,12 +425,13 @@ Staging validation happens when:
 | Rule | Applies To | Outcome if Failed |
 |---|---|---|
 | Batch Name present | All batches | Cannot save or submit |
-| Source selected | All batches | Cannot save or submit |
+| Template selected | All batches at submit time | Cannot submit |
+| Template `Format` selected | All batches at submit time | Cannot submit |
 | Processing Job Type selected | All batches | Cannot submit |
 | Assignment Mode selected | All batches | Cannot submit |
 | Assigned Team present when Assignment Mode = Team | Team batches | Cannot submit |
 | Assigned Manager present when Assignment Mode = Manager | Manager batches | Cannot submit |
-| File attached / file reference present when Source = CSV | CSV batches | Cannot create items or submit |
+| File attached / file reference present when Template Format = CSV | CSV batches | Cannot create items or submit |
 | Batch contains at least one child item before submit | All batches | Cannot submit |
 | Batch contains at least one eligible item before submit | All batches | Cannot submit |
 

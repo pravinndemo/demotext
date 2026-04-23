@@ -23,6 +23,16 @@ public class BulkIngestionProcessor
     private const int BatchSize = 1000;
     private const int MaxRetries = 3;
     private const int BaseDelayMs = 500;
+    private const string ItemEntityName = "voa_bulkingestionitem";
+    private const string ItemParentLookupColumn = "voa_parentbulkingestion";
+    private const string ItemValidationStatusColumn = "voa_validationstatus";
+    private const string ItemValidationFailureReasonColumn = "voa_validationfailurereason";
+    private const string ItemProcessingStageColumn = "voa_processingstage";
+    private const string ItemProcessingTimestampColumn = "voa_processingtimestamp";
+    private const string ItemProcessingAttemptCountColumn = "voa_processingattemptcount";
+    private const string ItemLockedForProcessingColumn = "voa_lockedforprocessing";
+    private const string ItemCanReprocessColumn = "voa_canreprocess";
+    private const string ItemSsuIdColumn = "voa_ssuid";
 
     public BulkIngestionProcessor(
         IHttpClientFactory httpClientFactory,
@@ -130,10 +140,7 @@ public class BulkIngestionProcessor
         await FinaliseIngestionAsync(ingestionResult);
 
         ingestionSw.Stop();
-        var finalStatus =
-            ingestionResult.FailureCount == 0 ? StatusCodes.Completed :
-            ingestionResult.SuccessCount == 0 ? StatusCodes.Failed :
-            StatusCodes.PartialSuccess;
+        var finalStatus = await DetermineFinalIngestionStatusAsync(ingestionResult);
         var batchCount = (int)Math.Ceiling(validItems.Count / (double)BatchSize);
         _logger.LogInformation(
             "Performance.TimerIngestionSummary ProcessingRunId={ProcessingRunId} IngestionId={IngestionId} ValidItems={ValidItems} SuccessCount={SuccessCount} FailureCount={FailureCount} Batches={BatchCount} FinalStatus={FinalStatus} TotalElapsedMs={TotalElapsedMs}",
@@ -163,14 +170,26 @@ public class BulkIngestionProcessor
 
             foreach (var item in batch)
             {
-                var ssuId = item.GetAttributeValue<string>("voa_ssuid")?.Trim() ?? string.Empty;
-                var parentIngestionId = item.GetAttributeValue<EntityReference>("voa_parentbulkingestion")?.Id ?? Guid.Empty;
+                await UpdateItemProcessingStateAsync(
+                    itemId: item.Id,
+                    stageCode: StatusCodes.StageValidation,
+                    lockForProcessing: true,
+                    incrementAttempt: true,
+                    errorMessage: null,
+                    canReprocess: true);
+
+                var ssuId = item.GetAttributeValue<string>(ItemSsuIdColumn)?.Trim() ?? string.Empty;
+                var parentIngestionId = item.GetAttributeValue<EntityReference>(ItemParentLookupColumn)?.Id ?? Guid.Empty;
 
                 if (parentIngestionId != Guid.Empty &&
                     !string.IsNullOrWhiteSpace(ssuId) &&
                     await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId))
                 {
-                    await TryMarkItemAsFailedAsync(item.Id);
+                    await TryMarkItemAsFailedAsync(
+                        itemId: item.Id,
+                        stageCode: StatusCodes.StageValidation,
+                        errorMessage: "ERR_DUP_SSU_OTHER_BATCH: SSU ID already exists in another batch.",
+                        canReprocess: false);
                     crossBatchRejectedCount++;
 
                     results.Add(new ItemProcessingResult
@@ -185,6 +204,30 @@ public class BulkIngestionProcessor
 
                 itemsToProcess.Add(item);
             }
+        }
+        else
+        {
+            foreach (var item in batch)
+            {
+                await UpdateItemProcessingStateAsync(
+                    itemId: item.Id,
+                    stageCode: StatusCodes.StageRequestCreation,
+                    lockForProcessing: true,
+                    incrementAttempt: true,
+                    errorMessage: null,
+                    canReprocess: true);
+            }
+        }
+
+        foreach (var item in itemsToProcess)
+        {
+            await UpdateItemProcessingStateAsync(
+                itemId: item.Id,
+                stageCode: StatusCodes.StageRequestCreation,
+                lockForProcessing: true,
+                incrementAttempt: false,
+                errorMessage: null,
+                canReprocess: true);
         }
 
         if (!itemsToProcess.Any())
@@ -251,7 +294,7 @@ public class BulkIngestionProcessor
 
     private async Task<bool> SsuIdExistsInOtherBatchesAsync(Guid parentIngestionId, string ssuId)
     {
-        var query = new QueryExpression("voa_bulkingestionitem")
+        var query = new QueryExpression(ItemEntityName)
         {
             ColumnSet = new ColumnSet(false),
             PageInfo = new PagingInfo { PageNumber = 1, Count = 1 },
@@ -259,8 +302,8 @@ public class BulkIngestionProcessor
             {
                 Conditions =
                 {
-                    new ConditionExpression("voa_ssuid", ConditionOperator.Equal, ssuId),
-                    new ConditionExpression("voa_parentbulkingestion", ConditionOperator.NotEqual, parentIngestionId),
+                    new ConditionExpression(ItemSsuIdColumn, ConditionOperator.Equal, ssuId),
+                    new ConditionExpression(ItemParentLookupColumn, ConditionOperator.NotEqual, parentIngestionId),
                 }
             }
         };
@@ -279,6 +322,14 @@ public class BulkIngestionProcessor
     {
         try
         {
+            await UpdateItemProcessingStateAsync(
+                itemId: item.Id,
+                stageCode: StatusCodes.StageRequestCreation,
+                lockForProcessing: true,
+                incrementAttempt: false,
+                errorMessage: null,
+                canReprocess: true);
+
             await RetryAsync(
                 async () =>
                 {
@@ -292,7 +343,18 @@ public class BulkIngestionProcessor
         }
         catch (Exception ex)
         {
-            await TryMarkItemAsFailedAsync(item.Id);
+            var isTransient = IsTransientException(ex);
+            await TryMarkItemAsFailedAsync(
+                itemId: item.Id,
+                stageCode: StatusCodes.StageRequestCreation,
+                errorMessage: ex.Message,
+                canReprocess: isTransient);
+
+            _logger.LogWarning(
+                "RetrySingleItem exhausted for {ItemId}. ClassifiedTransient={IsTransient}. Error={Error}",
+                item.Id,
+                isTransient,
+                ex.Message);
 
             return new ItemProcessingResult
             {
@@ -326,8 +388,13 @@ public class BulkIngestionProcessor
 
     private OrganizationRequest BuildItemRequest(Entity item)
     {
-        var update = new Entity("voa_bulkingestionitem", item.Id);
-        update["voa_validationstatus"] = new OptionSetValue(StatusCodes.Processed);
+        var update = new Entity(ItemEntityName, item.Id);
+        update[ItemValidationStatusColumn] = new OptionSetValue(StatusCodes.Processed);
+        update[ItemProcessingStageColumn] = new OptionSetValue(StatusCodes.StageCompleted);
+        update[ItemProcessingTimestampColumn] = DateTime.UtcNow;
+        update[ItemValidationFailureReasonColumn] = string.Empty;
+        update[ItemLockedForProcessingColumn] = false;
+        update[ItemCanReprocessColumn] = false;
 
         return new UpdateRequest { Target = update };
     }
@@ -359,10 +426,7 @@ public class BulkIngestionProcessor
 
     private async Task FinaliseIngestionAsync(IngestionProcessingResult result)
     {
-        int status =
-            result.FailureCount == 0 ? StatusCodes.Completed :
-            result.SuccessCount == 0 ? StatusCodes.Failed :
-            StatusCodes.PartialSuccess;
+        var status = await DetermineFinalIngestionStatusAsync(result);
 
         var parent = new Entity("voa_bulkingestion", result.IngestionId);
         parent["statuscode"] = new OptionSetValue(status);
@@ -374,6 +438,44 @@ public class BulkIngestionProcessor
         }, $"Finalise {result.IngestionId}", MaxRetries);
 
         _logger.LogInformation($"Completed Ingestion {result.IngestionId}");
+    }
+
+    private async Task<int> DetermineFinalIngestionStatusAsync(IngestionProcessingResult result)
+    {
+        if (result.FailureCount == 0)
+        {
+            return StatusCodes.Completed;
+        }
+
+        if (await HasReprocessableFailuresAsync(result.IngestionId))
+        {
+            return StatusCodes.Delayed;
+        }
+
+        return result.SuccessCount == 0
+            ? StatusCodes.Failed
+            : StatusCodes.PartialSuccess;
+    }
+
+    private async Task<bool> HasReprocessableFailuresAsync(Guid ingestionId)
+    {
+        var query = new QueryExpression(ItemEntityName)
+        {
+            ColumnSet = new ColumnSet(false),
+            PageInfo = new PagingInfo { PageNumber = 1, Count = 1 },
+            Criteria = new FilterExpression
+            {
+                Conditions =
+                {
+                    new ConditionExpression(ItemParentLookupColumn, ConditionOperator.Equal, ingestionId),
+                    new ConditionExpression(ItemValidationStatusColumn, ConditionOperator.Equal, StatusCodes.ItemFailed),
+                    new ConditionExpression(ItemCanReprocessColumn, ConditionOperator.Equal, true),
+                }
+            }
+        };
+
+        var response = await _crmService.RetrieveMultipleAsync(query);
+        return response.Entities.Count > 0;
     }
 
     private async Task<List<Entity>> RetrieveSubmittedIngestionsAsync()
@@ -391,13 +493,13 @@ public class BulkIngestionProcessor
 
     private async Task<List<Entity>> RetrieveValidItemsAsync(Guid ingestionId)
     {
-        var query = new QueryExpression("voa_bulkingestionitem")
+        var query = new QueryExpression(ItemEntityName)
         {
             ColumnSet = new ColumnSet(true)
         };
 
-        query.Criteria.AddCondition("voa_parentbulkingestion", ConditionOperator.Equal, ingestionId);
-        query.Criteria.AddCondition("voa_validationstatus", ConditionOperator.Equal, StatusCodes.Valid);
+        query.Criteria.AddCondition(ItemParentLookupColumn, ConditionOperator.Equal, ingestionId);
+        query.Criteria.AddCondition(ItemValidationStatusColumn, ConditionOperator.Equal, StatusCodes.Valid);
 
         var result = await _crmService.RetrieveMultipleAsync(query);
         return result.Entities.ToList();
@@ -415,12 +517,19 @@ public class BulkIngestionProcessor
         }, $"UpdateStatus {id}", MaxRetries);
     }
 
-    private async Task TryMarkItemAsFailedAsync(Guid itemId)
+    private async Task TryMarkItemAsFailedAsync(Guid itemId, int stageCode, string errorMessage, bool canReprocess)
     {
         try
         {
-            var entity = new Entity("voa_bulkingestionitem", itemId);
-            entity["voa_validationstatus"] = new OptionSetValue(StatusCodes.ItemFailed);
+            var entity = new Entity(ItemEntityName, itemId)
+            {
+                [ItemValidationStatusColumn] = new OptionSetValue(StatusCodes.ItemFailed),
+                [ItemProcessingStageColumn] = new OptionSetValue(stageCode),
+                [ItemProcessingTimestampColumn] = DateTime.UtcNow,
+                [ItemValidationFailureReasonColumn] = errorMessage,
+                [ItemCanReprocessColumn] = canReprocess,
+                [ItemLockedForProcessingColumn] = false,
+            };
 
             await _crmService.UpdateAsync(entity);
         }
@@ -428,6 +537,70 @@ public class BulkIngestionProcessor
         {
             _logger.LogWarning($"Could not mark item {itemId} as failed: {ex.Message}");
         }
+    }
+
+    private async Task UpdateItemProcessingStateAsync(
+        Guid itemId,
+        int stageCode,
+        bool lockForProcessing,
+        bool incrementAttempt,
+        string? errorMessage,
+        bool canReprocess)
+    {
+        try
+        {
+            var update = new Entity(ItemEntityName, itemId)
+            {
+                [ItemProcessingStageColumn] = new OptionSetValue(stageCode),
+                [ItemProcessingTimestampColumn] = DateTime.UtcNow,
+                [ItemLockedForProcessingColumn] = lockForProcessing,
+                [ItemCanReprocessColumn] = canReprocess,
+            };
+
+            if (errorMessage is not null)
+            {
+                update[ItemValidationFailureReasonColumn] = errorMessage;
+            }
+
+            if (incrementAttempt)
+            {
+                var item = await _crmService.RetrieveAsync(ItemEntityName, itemId, new ColumnSet(ItemProcessingAttemptCountColumn));
+                var attemptCount = item.GetAttributeValue<int?>(ItemProcessingAttemptCountColumn) ?? 0;
+                update[ItemProcessingAttemptCountColumn] = attemptCount + 1;
+            }
+
+            await _crmService.UpdateAsync(update);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not update processing state for item {ItemId}", itemId);
+        }
+    }
+
+    private static bool IsTransientException(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is TimeoutException ||
+                current is TaskCanceledException ||
+                current is HttpRequestException)
+            {
+                return true;
+            }
+
+            var message = current.Message ?? string.Empty;
+            if (message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("temporarily unavailable", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("throttle", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("429", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("503", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("connection", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
