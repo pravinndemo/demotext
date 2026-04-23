@@ -194,7 +194,6 @@ public sealed class RequestJobCreationService
                 return result;
             }
 
-            var requestStatusCode = ConfigurationIds.RequestStatusCodeOnHold;
             var requestTypeColumnName = Environment.GetEnvironmentVariable("RequestRequestTypeLookupColumnName") ?? "voa_requesttypeid";
             var requestTargetDateColumnName = Environment.GetEnvironmentVariable("RequestTargetDateColumnName") ?? "voa_targetdate";
             var requestDateReceivedColumnName = Environment.GetEnvironmentVariable("RequestDateReceivedColumnName") ?? "voa_datereceived";
@@ -210,7 +209,7 @@ public sealed class RequestJobCreationService
                 [requestTypeColumnName] = new EntityReference(ConfigurationValues.RequestTypeEntityName, ConfigurationIds.RequestTypeCouncilTax),
                 [requestDateReceivedColumnName] = DateTime.UtcNow,
                 [requestTargetDateColumnName] = DateTime.UtcNow.AddDays(requestTargetDateOffsetDays),
-                [requestStatusColumnName] = new OptionSetValue(requestStatusCode),
+                [requestStatusColumnName] = new OptionSetValue(ConfigurationIds.RequestInProgressStatusCode),
             };
 
             if (!string.IsNullOrWhiteSpace(item.SourceValue))

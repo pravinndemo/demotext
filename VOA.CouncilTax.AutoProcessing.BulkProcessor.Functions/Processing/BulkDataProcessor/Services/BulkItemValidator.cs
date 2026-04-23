@@ -59,7 +59,7 @@ public sealed class BulkItemValidator
             var validationErrors = new List<string>();
 
             var validationStatusColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName") ?? "voa_validationstatus";
-            var validationMessageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationmessage";
+            var validationMessageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason";
             var isDuplicateColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemIsDuplicateColumnName") ?? "voa_isduplicate";
             var duplicateCategoryColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemDuplicateCategoryColumnName") ?? "voa_duplicatecategory";
             var ssuIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_ssuid";

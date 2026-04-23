@@ -4,7 +4,7 @@ public sealed class BulkDataRouteDecisionRequest
 {
     public Guid BulkProcessorId { get; set; }
 
-    /// <summary>voa_source option set label from voa_bulkingestion. Use "System Entered" for PCF/selection path or "CSV" for file upload path. Takes precedence over the Dataverse column when provided.</summary>
+    /// <summary>Source type override for routing/request creation. When omitted, source is derived from template `voa_format` and falls back by route mode (`System Entered` for selection, `CSV` for file).</summary>
     public string? SourceType { get; set; }
 
     public List<string>? SsuIds { get; set; }

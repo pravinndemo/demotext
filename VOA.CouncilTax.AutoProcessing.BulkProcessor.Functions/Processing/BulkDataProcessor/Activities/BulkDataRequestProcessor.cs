@@ -176,12 +176,11 @@ public sealed class BulkDataRequestProcessor
 
         var bulkProcessorEntityName = Environment.GetEnvironmentVariable("BulkProcessorEntityLogicalName") ?? "voa_bulkingestion";
         var statusColumnName = Environment.GetEnvironmentVariable("BulkProcessorStatusColumnName") ?? "statuscode";
-        var fileTypeColumnName = Environment.GetEnvironmentVariable("BulkProcessorFileTypeColumnName") ?? "voa_source";
-        var customStatusColumnName = Environment.GetEnvironmentVariable("BulkProcessorCustomStatusColumnName") ?? "voa_status";
+        var customStatusColumnName = Environment.GetEnvironmentVariable("BulkProcessorCustomStatusColumnName") ?? statusColumnName;
         var totalRowsColumnName = Environment.GetEnvironmentVariable("BulkProcessorTotalRowsColumnName") ?? "voa_totalrows";
         var validItemCountColumnName = Environment.GetEnvironmentVariable("BulkProcessorValidItemCountColumnName") ?? "voa_validitemcount";
-        var draftStatusValue = Environment.GetEnvironmentVariable("BulkProcessorDraftStatus") ?? "Draft";
-        var queuedStatusValue = Environment.GetEnvironmentVariable("BulkProcessorQueuedStatus") ?? "Queued";
+        var draftStatusCode = GetIntFlag("BulkProcessorDraftStatusCode", global::VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants.StatusCodes.Draft);
+        var queuedStatusCode = GetIntFlag("BulkProcessorQueuedStatusCode", global::VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants.StatusCodes.Queued);
 
         var action = bulkAction;
         if (!svtOnly && !action.HasValue)
@@ -203,7 +202,7 @@ public sealed class BulkDataRequestProcessor
             bulkProcessor = _dataverseService.Retrieve(
                 bulkProcessorEntityName,
                 request.BulkProcessorId,
-                new ColumnSet(statusColumnName, fileTypeColumnName, customStatusColumnName, totalRowsColumnName, validItemCountColumnName, "voa_processingjobtype", "voa_template"));
+                new ColumnSet(statusColumnName, customStatusColumnName, totalRowsColumnName, validItemCountColumnName, "voa_processingjobtype", "voa_template"));
         }
         catch (Exception ex)
         {
@@ -223,16 +222,17 @@ public sealed class BulkDataRequestProcessor
 
         // Gate check: both SaveItems and SubmitBatch run only when batch is Draft.
         var currentStatus = GetFormattedValueOrEmpty(bulkProcessor, customStatusColumnName);
-        if (!string.Equals(currentStatus, draftStatusValue, StringComparison.OrdinalIgnoreCase))
+        var currentStatusCode = GetOptionSetValueOrNull(bulkProcessor, customStatusColumnName);
+        if (currentStatusCode != draftStatusCode)
         {
             _logger.LogWarning(
-                "Batch {BulkProcessorId} is not in 'Draft' status. Current status: {CurrentStatus}. CorrelationId: {CorrelationId}",
-                request.BulkProcessorId, currentStatus, request.CorrelationId);
+                "Batch {BulkProcessorId} is not in Draft status. Current status: {CurrentStatus} ({CurrentStatusCode}). CorrelationId: {CorrelationId}",
+                request.BulkProcessorId, currentStatus, currentStatusCode, request.CorrelationId);
             return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
             {
                 Accepted = false,
                 Code = "BATCH_NOT_DRAFT",
-                Message = $"Batch must be in 'Draft' status for {action}. Current status: {currentStatus}",
+                Message = $"Batch must be in Draft status for {action}. Current status: {currentStatus} ({currentStatusCode})",
                 BulkProcessorId = request.BulkProcessorId,
                 CorrelationId = request.CorrelationId,
                 Action = action?.ToString(),
@@ -240,20 +240,22 @@ public sealed class BulkDataRequestProcessor
         }
 
         var statusReasonLabel = GetFormattedValueOrEmpty(bulkProcessor, statusColumnName);
-        var fileTypeLabel = GetFormattedValueOrEmpty(bulkProcessor, fileTypeColumnName);
         var statusReasonCode = GetOptionSetValueOrNull(bulkProcessor, statusColumnName);
-        var fileTypeCode = GetOptionSetValueOrNull(bulkProcessor, fileTypeColumnName);
         var totalRows = GetWholeNumberValueOrZero(bulkProcessor, totalRowsColumnName);
         var validItemCount = GetWholeNumberValueOrZero(bulkProcessor, validItemCountColumnName);
+        var templateSettings = await ResolveTemplateProcessingSettingsAsync(bulkProcessor);
+        var sourceTypeFallback = decision.RouteMode == "BULK_FILE" ? "CSV" : "System Entered";
 
         decision.BulkProcessorId = request.BulkProcessorId;
         decision.Action = action?.ToString();
         decision.StatusReason = statusReasonLabel;
         decision.StatusReasonCode = statusReasonCode;
-        decision.FileType = fileTypeLabel;
-        decision.FileTypeCode = fileTypeCode;
+        decision.FileType = templateSettings.FormatLabel;
+        decision.FileTypeCode = templateSettings.FormatCode;
 
-        decision.SourceType = string.IsNullOrWhiteSpace(request.SourceType) ? fileTypeLabel : request.SourceType;
+        decision.SourceType = string.IsNullOrWhiteSpace(request.SourceType)
+            ? (templateSettings.FormatLabel ?? sourceTypeFallback)
+            : request.SourceType;
         // SaveItems is create/update only. Deletions are explicit user actions on the form/subgrid
         // and are not inferred from missing items in the incoming payload.
         if (decision.RouteMode == "BULK_SELECTION")
@@ -268,13 +270,26 @@ public sealed class BulkDataRequestProcessor
         {
             decision.StagingStatus = "FileStagingAccepted";
             decision.Message = action == BulkRequestAction.SaveItems
-            ? $"File payload accepted for save/update in Draft. Function will read {request.FileColumnName ?? "sourcefile"} from Dataverse. Removals are handled explicitly on the form."
-                : $"File payload accepted for final submit. Function will read {request.FileColumnName ?? "sourcefile"} from Dataverse.";
+            ? $"File payload accepted for save/update in Draft. Function will read {request.FileColumnName ?? "voa_sourcefile"} from Dataverse. Removals are handled explicitly on the form."
+                : $"File payload accepted for final submit. Function will read {request.FileColumnName ?? "voa_sourcefile"} from Dataverse.";
         }
 
         if (action == BulkRequestAction.SubmitBatch)
         {
             var createImmediately = GetBooleanFlag("BulkSubmitCreateImmediately", defaultValue: true);
+
+            if (!templateSettings.FromTemplate || string.IsNullOrWhiteSpace(templateSettings.FormatLabel))
+            {
+                return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
+                {
+                    Accepted = false,
+                    Code = "TEMPLATE_SOURCE_REQUIRED",
+                    Message = "SubmitBatch requires a selected template with Format (voa_format) configured.",
+                    BulkProcessorId = request.BulkProcessorId,
+                    CorrelationId = request.CorrelationId,
+                    Action = action.ToString(),
+                });
+            }
 
             if (totalRows <= 0)
             {
@@ -320,8 +335,6 @@ public sealed class BulkDataRequestProcessor
 
                 try
                 {
-                    var templateSettings = await ResolveTemplateProcessingSettingsAsync(bulkProcessor);
-
                     if (!templateSettings.JobTypeId.HasValue || templateSettings.JobTypeId.Value == Guid.Empty)
                     {
                         return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
@@ -379,19 +392,19 @@ public sealed class BulkDataRequestProcessor
             try
             {
                 var updateEntity = new Entity(bulkProcessorEntityName, request.BulkProcessorId);
-                updateEntity[customStatusColumnName] = queuedStatusValue;
+                updateEntity[customStatusColumnName] = new OptionSetValue(queuedStatusCode);
                 _dataverseService.Update(updateEntity);
 
                 _logger.LogInformation(
-                    "Batch {BulkProcessorId} status updated to '{QueuedStatus}'. CorrelationId: {CorrelationId}",
-                    request.BulkProcessorId, queuedStatusValue, request.CorrelationId);
+                    "Batch {BulkProcessorId} status updated to Queued ({QueuedStatusCode}). CorrelationId: {CorrelationId}",
+                    request.BulkProcessorId, queuedStatusCode, request.CorrelationId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(
                     ex,
-                    "Failed to update batch {BulkProcessorId} status to '{QueuedStatus}'. CorrelationId: {CorrelationId}",
-                    request.BulkProcessorId, queuedStatusValue, request.CorrelationId);
+                    "Failed to update batch {BulkProcessorId} status to Queued ({QueuedStatusCode}). CorrelationId: {CorrelationId}",
+                    request.BulkProcessorId, queuedStatusCode, request.CorrelationId);
                 // Continue processing even if status update fails, as staging may have partially succeeded
                 decision.Message += " [Warning: Status transition failed]";
             }
@@ -446,7 +459,7 @@ public sealed class BulkDataRequestProcessor
     {
         var saveItemsSw = Stopwatch.StartNew();
         var bulkIngestionItemEntityName = Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
-        var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_BulkIngestion";
+        var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
         var ssuIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_ssuid";
         var sourceValueColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_sourcevalue";
         var validationStatusColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName") ?? "voa_validationstatus";
@@ -531,7 +544,7 @@ public sealed class BulkDataRequestProcessor
         // For BULK_FILE: parse CSV from Dataverse file column
         else
         {
-            var fileColumnName = request.FileColumnName ?? "sourcefile";
+            var fileColumnName = request.FileColumnName ?? "voa_sourcefile";
             var csvParser = new CsvFileParser(_dataverseService, _logger);
 
             try
@@ -709,11 +722,11 @@ public sealed class BulkDataRequestProcessor
     {
         var createFlowSw = Stopwatch.StartNew();
         var bulkIngestionItemEntityName = Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
-        var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_BulkIngestion";
+        var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
         var ssuIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_ssuid";
         var sourceValueColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_sourcevalue";
         var validationStatusColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName") ?? "voa_validationstatus";
-        var validationMessageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationmessage";
+        var validationMessageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason";
         var requestLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemRequestLookupColumnName") ?? "voa_requestlookup";
         var jobLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemJobLookupColumnName") ?? "voa_joblookup";
         var processingRunIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingRunIdColumnName") ?? "voa_processingrunid";
@@ -972,28 +985,35 @@ public sealed class BulkDataRequestProcessor
 
         if (templateRef is null)
         {
-            return new TemplateProcessingSettings(headerJobTypeRef?.Id, true, false);
+            return new TemplateProcessingSettings(headerJobTypeRef?.Id, true, false, null, null);
         }
 
         var templateEntityName = Environment.GetEnvironmentVariable("BulkIngestionTemplateEntityLogicalName") ?? "voa_bulkingestiontemplate";
         var templateJobTypeColumnName = Environment.GetEnvironmentVariable("BulkIngestionTemplateJobTypeLookupColumnName") ?? "voa_jobtypelookup";
         var templateCaseWorkModeColumnName = Environment.GetEnvironmentVariable("BulkIngestionTemplateCaseWorkModeColumnName") ?? "voa_caseworkmode";
+        var templateFormatColumnName = Environment.GetEnvironmentVariable("BulkIngestionTemplateFormatColumnName") ?? "voa_format";
 
         try
         {
             var template = await _dataverseService.RetrieveAsync(
                 templateEntityName,
                 templateRef.Id,
-                new ColumnSet(templateJobTypeColumnName, templateCaseWorkModeColumnName));
+                new ColumnSet(templateJobTypeColumnName, templateCaseWorkModeColumnName, templateFormatColumnName));
 
             var templateJobTypeRef = template.GetAttributeValue<EntityReference>(templateJobTypeColumnName);
             var caseWorkModeCode = template.GetAttributeValue<OptionSetValue>(templateCaseWorkModeColumnName)?.Value;
+            var formatCode = template.GetAttributeValue<OptionSetValue>(templateFormatColumnName)?.Value;
+            var formatLabel = template.FormattedValues.TryGetValue(templateFormatColumnName, out var formattedFormat)
+                ? formattedFormat
+                : null;
             var createJob = caseWorkModeCode != 358800000;
 
             return new TemplateProcessingSettings(
                 templateJobTypeRef?.Id ?? headerJobTypeRef?.Id,
                 createJob,
-                true);
+                true,
+                formatLabel,
+                formatCode);
         }
         catch (Exception ex)
         {
@@ -1001,7 +1021,7 @@ public sealed class BulkDataRequestProcessor
                 ex,
                 "Failed to load template {TemplateId}; falling back to bulk header job type.",
                 templateRef.Id);
-            return new TemplateProcessingSettings(headerJobTypeRef?.Id, true, false);
+            return new TemplateProcessingSettings(headerJobTypeRef?.Id, true, false, null, null);
         }
     }
 
@@ -1024,6 +1044,12 @@ public sealed class BulkDataRequestProcessor
     {
         var raw = Environment.GetEnvironmentVariable(key);
         return bool.TryParse(raw, out var parsed) ? parsed : defaultValue;
+    }
+
+    private static int GetIntFlag(string key, int defaultValue)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        return int.TryParse(raw, out var parsed) ? parsed : defaultValue;
     }
 
     private BulkItemCounts CalculateItemCounts(EntityCollection items)
@@ -1079,7 +1105,7 @@ public sealed class BulkDataRequestProcessor
         return entity.GetAttributeValue<int?>(columnName) ?? 0;
     }
 
-    private sealed record TemplateProcessingSettings(Guid? JobTypeId, bool CreateJob, bool FromTemplate);
+    private sealed record TemplateProcessingSettings(Guid? JobTypeId, bool CreateJob, bool FromTemplate, string? FormatLabel, int? FormatCode);
 
 }
 

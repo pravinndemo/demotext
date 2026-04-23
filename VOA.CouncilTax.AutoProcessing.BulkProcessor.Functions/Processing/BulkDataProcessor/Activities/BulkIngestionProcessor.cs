@@ -164,7 +164,7 @@ public class BulkIngestionProcessor
             foreach (var item in batch)
             {
                 var ssuId = item.GetAttributeValue<string>("voa_ssuid")?.Trim() ?? string.Empty;
-                var parentIngestionId = item.GetAttributeValue<EntityReference>("voa_parentingestion")?.Id ?? Guid.Empty;
+                var parentIngestionId = item.GetAttributeValue<EntityReference>("voa_parentbulkingestion")?.Id ?? Guid.Empty;
 
                 if (parentIngestionId != Guid.Empty &&
                     !string.IsNullOrWhiteSpace(ssuId) &&
@@ -260,7 +260,7 @@ public class BulkIngestionProcessor
                 Conditions =
                 {
                     new ConditionExpression("voa_ssuid", ConditionOperator.Equal, ssuId),
-                    new ConditionExpression("voa_parentingestion", ConditionOperator.NotEqual, parentIngestionId),
+                    new ConditionExpression("voa_parentbulkingestion", ConditionOperator.NotEqual, parentIngestionId),
                 }
             }
         };
@@ -327,7 +327,7 @@ public class BulkIngestionProcessor
     private OrganizationRequest BuildItemRequest(Entity item)
     {
         var update = new Entity("voa_bulkingestionitem", item.Id);
-        update["voa_itemstatus"] = new OptionSetValue(StatusCodes.Processed);
+        update["voa_validationstatus"] = new OptionSetValue(StatusCodes.Processed);
 
         return new UpdateRequest { Target = update };
     }
@@ -365,7 +365,7 @@ public class BulkIngestionProcessor
             StatusCodes.PartialSuccess;
 
         var parent = new Entity("voa_bulkingestion", result.IngestionId);
-        parent["voa_ingestionstatus"] = new OptionSetValue(status);
+        parent["statuscode"] = new OptionSetValue(status);
 
         await RetryAsync(async () =>
         {
@@ -396,8 +396,8 @@ public class BulkIngestionProcessor
             ColumnSet = new ColumnSet(true)
         };
 
-        query.Criteria.AddCondition("voa_parentingestion", ConditionOperator.Equal, ingestionId);
-        query.Criteria.AddCondition("voa_itemstatus", ConditionOperator.Equal, StatusCodes.Valid);
+        query.Criteria.AddCondition("voa_parentbulkingestion", ConditionOperator.Equal, ingestionId);
+        query.Criteria.AddCondition("voa_validationstatus", ConditionOperator.Equal, StatusCodes.Valid);
 
         var result = await _crmService.RetrieveMultipleAsync(query);
         return result.Entities.ToList();
@@ -406,7 +406,7 @@ public class BulkIngestionProcessor
     private async Task UpdateIngestionStatusAsync(Guid id, int status)
     {
         var entity = new Entity("voa_bulkingestion", id);
-        entity["voa_ingestionstatus"] = new OptionSetValue(status);
+        entity["statuscode"] = new OptionSetValue(status);
 
         await RetryAsync(async () =>
         {
@@ -420,7 +420,7 @@ public class BulkIngestionProcessor
         try
         {
             var entity = new Entity("voa_bulkingestionitem", itemId);
-            entity["voa_itemstatus"] = new OptionSetValue(StatusCodes.ItemFailed);
+            entity["voa_validationstatus"] = new OptionSetValue(StatusCodes.ItemFailed);
 
             await _crmService.UpdateAsync(entity);
         }
