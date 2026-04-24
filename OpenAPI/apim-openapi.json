@@ -1,0 +1,738 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "DEV Welsh ctautoprocessing",
+    "description": "Provides access to Durable Task APIs that are exposed by the Azure Durable Function that performs auto-processing Council Tax jobs. <a href=\"https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-http-api\">See standard Durable Task API documentation here</a>",
+    "version": "1.0"
+  },
+  "servers": [
+    {
+      "url": "https://dev-cta-autoprocessing.azurewebsites.net/api"
+    }
+  ],
+  "paths": {
+    "/instances/{instanceId}": {
+      "get": {
+        "summary": "Single Council Tax Auto Processing Instance.",
+        "description": "Retrieve the status and output of a single Council Tax Auto Processing Instance.",
+        "operationId": "get-instances-instanceid",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "description": "Unique Id of the Council Tax Auto Processing Instance to return runtime data for.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "showHistory",
+            "in": "query",
+            "description": "Optional parameter. If set to true, the orchestration execution history will be included in the response payload.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "showInput",
+            "in": "query",
+            "description": "Optional parameter. If set to false, the function input will not be included in the response payload.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "showHistoryOutput",
+            "in": "query",
+            "description": "Optional parameter. If set to true, the function outputs will be included in the orchestration execution history.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "returnInternalServerErrorOnFailure",
+            "in": "query",
+            "description": "Optional parameter. If set to true, this API will return an HTTP 500 response instead of a 200 if the instance is in a failure state. This parameter is intended for automated status polling scenarios.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/instances": {
+      "get": {
+        "summary": "Status of all Council Tax Auto Processing Instances.",
+        "description": "Perform a query to show the status and output of all Council Tax Auto Processing Instances.",
+        "operationId": "get-instances",
+        "parameters": [
+          {
+            "name": "instanceIdPrefix",
+            "in": "query",
+            "description": "Optional parameter. When specified, filters the list of returned instances to include only instances whose instance ID starts with the specified prefix string.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdTimeFrom",
+            "in": "query",
+            "description": "Optional parameter. When specified, filters the list of returned instances that were created at or after the given ISO8601 timestamp.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "createdTimeTo",
+            "in": "query",
+            "description": "Optional parameter. When specified, filters the list of returned instances that were created at or before the given ISO8601 timestamp.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "runtimeStatus",
+            "in": "query",
+            "description": "Optional parameter. When specified, filters the list of returned instances based on their runtime status. To see the list of possible runtime status values, see <a href=\"https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-instance-management?tabs=csharp#query-instances\">https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-instance-management?tabs=csharp#query-instances</a>",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "top",
+            "in": "query",
+            "description": "Optional parameter. When specified, limits the number of instances returned by the query.",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "showInput",
+            "in": "query",
+            "description": "Optional parameter. If set to false, the function input will not be included in the response payload.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "showHistoryOutput",
+            "in": "query",
+            "description": "Optional parameter. If set to true, the function outputs will be included in the orchestration execution history.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "x-ms-continuation-token",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "x-ms-continuation-token": {
+                "description": "If more results exist, a continuation token is returned in the response header",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "string"
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found. No instances were found that match the filter expression."
+          }
+        }
+      }
+    },
+    "/instances/{instanceId}/raiseEvent/{eventName}": {
+      "post": {
+        "summary": "Raise Event",
+        "description": "Send an event notification message to a running instance.",
+        "operationId": "post-instances-instanceid-raiseevent-eventname",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "description": "The ID of the Council Tax Auto Processing Instance",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "eventName",
+            "in": "path",
+            "description": "The name of the event that the target orchestration instance is waiting on.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The JSON-formatted event payload.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "string"
+              },
+              "example": "string"
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. The raised event was accepted for processing."
+          },
+          "400": {
+            "description": "Bad Request. The request content was not of type application/json or was not valid JSON."
+          },
+          "404": {
+            "description": "Not Found. The specified instance was not found."
+          },
+          "410": {
+            "description": "Gone. The specified instance has completed or failed and cannot process any raised events."
+          }
+        }
+      }
+    },
+    "/instances/{instanceId}/rewind": {
+      "post": {
+        "summary": "Rewind.",
+        "description": "Restores a failed orchestration instance into a running state by replaying the most recent failed operations.",
+        "operationId": "post-instances-instanceid-rewind",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "description": "The ID of the Council Tax Auto Processing Instance",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "Optional. The reason for rewinding the orchestration instance.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted. The rewind request was accepted for processing."
+          },
+          "404": {
+            "description": "Not Found. The specified instance was not found."
+          },
+          "410": {
+            "description": "Gone. The specified instance has completed or was terminated."
+          }
+        }
+      }
+    },
+    "/instances/{instanceId}/terminate": {
+      "post": {
+        "summary": "Terminate.",
+        "description": "Terminates a running orchestration instance.",
+        "operationId": "post-instances-instanceid-terminate",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "description": "The ID of the Council Tax Auto Processing Instance that should be terminated.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "description": "Optional. The reason for terminating the orchestration instance.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted. The terminate request was accepted for processing."
+          },
+          "404": {
+            "description": "Not Found. The specified instance was not found."
+          },
+          "410": {
+            "description": "Gone. The specified instance has completed or failed."
+          }
+        }
+      }
+    },
+    "/bulk-data/save-items": {
+      "post": {
+        "summary": "Save Items",
+        "description": "Validates and stages items for a Draft batch. Use selection mode with `ssuIds`, or file mode with `bulkProcessorId` (reads Dataverse file column `voa_sourcefile`).",
+        "operationId": "T_BulkDataSaveItemsHttpTrigger",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDataRouteDecisionRequest"
+              },
+              "examples": {
+                "selectionMode": {
+                  "summary": "Selection payload",
+                  "value": {
+                    "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                    "ssuIds": [
+                      "100000000001",
+                      "100000000002"
+                    ],
+                    "correlationId": "save-items-selection-001"
+                  }
+                },
+                "fileMode": {
+                  "summary": "File payload",
+                  "value": {
+                    "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                    "correlationId": "save-items-file-001"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Request was validated and processing started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                },
+                "examples": {
+                  "acceptedSelection": {
+                    "summary": "Selection staging accepted",
+                    "value": {
+                      "accepted": true,
+                      "action": "SaveItems",
+                      "routeMode": "BULK_SELECTION",
+                      "stagingStatus": "StagingAccepted",
+                      "receivedCount": 2,
+                      "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                      "correlationId": "save-items-selection-001",
+                      "message": "Selection payload accepted for save/update in Draft. Removals are handled explicitly on the form."
+                    }
+                  },
+                  "acceptedFile": {
+                    "summary": "File staging accepted",
+                    "value": {
+                      "accepted": true,
+                      "action": "SaveItems",
+                      "routeMode": "BULK_FILE",
+                      "stagingStatus": "FileStagingAccepted",
+                      "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                      "correlationId": "save-items-file-001",
+                      "message": "File payload accepted for save/update in Draft. Function will read voa_sourcefile from Dataverse. Removals are handled explicitly on the form."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. Payload is invalid for this endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                },
+                "examples": {
+                  "invalidJson": {
+                    "summary": "Malformed JSON",
+                    "value": {
+                      "accepted": false,
+                      "code": "INVALID_JSON",
+                      "message": "Request payload is not valid JSON."
+                    }
+                  },
+                  "batchNotDraft": {
+                    "summary": "Batch not in Draft",
+                    "value": {
+                      "accepted": false,
+                      "code": "BATCH_NOT_DRAFT",
+                      "action": "SaveItems",
+                      "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                      "message": "Batch must be in Draft status for SaveItems. Current status: Queued (status code omitted).",
+                      "correlationId": "save-items-selection-001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bulk-data/submit-batch": {
+      "post": {
+        "summary": "Submit Batch",
+        "description": "Submits a Draft batch for processing. Requires a valid `bulkProcessorId` and valid staged items. `sourceType` is derived by the function from template format or route defaults.",
+        "operationId": "T_BulkDataSubmitBatchHttpTrigger",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDataRouteDecisionRequest"
+              },
+              "examples": {
+                "submitBatch": {
+                  "summary": "Submit staged batch",
+                  "value": {
+                    "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                    "userId": "00000000-0000-0000-0000-000000000002",
+                    "componentName": "BulkSubmit",
+                    "requestedBy": "00000000-0000-0000-0000-000000000002",
+                    "correlationId": "submit-batch-001"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Batch submission has been queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                },
+                "examples": {
+                  "acceptedSubmit": {
+                    "summary": "Submit accepted",
+                    "value": {
+                      "accepted": true,
+                      "action": "SubmitBatch",
+                      "routeMode": "BULK_SELECTION",
+                      "stagingStatus": "StagingAccepted",
+                      "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                      "correlationId": "submit-batch-001",
+                      "message": "Selection payload accepted for final submit. Mode=Request and Job(s) (template). Created 2 request/job records; 0 failed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. Batch is not submittable or payload is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                },
+                "examples": {
+                  "noItemsToSubmit": {
+                    "summary": "No staged items",
+                    "value": {
+                      "accepted": false,
+                      "code": "NO_ITEMS_TO_SUBMIT",
+                      "action": "SubmitBatch",
+                      "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                      "message": "Batch has no items. Save items before submitting.",
+                      "correlationId": "submit-batch-001"
+                    }
+                  },
+                  "noValidItemsToSubmit": {
+                    "summary": "No valid staged items",
+                    "value": {
+                      "accepted": false,
+                      "code": "NO_VALID_ITEMS_TO_SUBMIT",
+                      "action": "SubmitBatch",
+                      "bulkProcessorId": "00000000-0000-0000-0000-000000000001",
+                      "message": "Batch has no valid items. Fix item validation issues before submitting.",
+                      "correlationId": "submit-batch-001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bulk-data/svt-single": {
+      "post": {
+        "summary": "Create SVT Single Request",
+        "description": "Creates a single SVT request/job using `ssuId`, `userId`, and `componentName`.",
+        "operationId": "T_SvtSingleHttpTrigger",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDataRouteDecisionRequest"
+              },
+              "examples": {
+                "svtSingle": {
+                  "summary": "SVT single-item request",
+                  "value": {
+                    "ssuId": "100000000001",
+                    "userId": "00000000-0000-0000-0000-000000000002",
+                    "componentName": "SVT-UI",
+                    "correlationId": "svt-single-001"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. SVT request/job creation has been started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                },
+                "examples": {
+                  "acceptedSvt": {
+                    "summary": "SVT accepted",
+                    "value": {
+                      "accepted": true,
+                      "action": "SvtSingle",
+                      "routeMode": "SVT_SINGLE",
+                      "stagingStatus": "Created",
+                      "receivedCount": 1,
+                      "sourceType": "SVT",
+                      "correlationId": "svt-single-001",
+                      "message": "SVT request/job created successfully. RequestId=<request-id>, JobId=<job-id>"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. Payload is invalid for SVT endpoint.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                },
+                "examples": {
+                  "invalidRouteForEndpoint": {
+                    "summary": "Wrong route payload",
+                    "value": {
+                      "accepted": false,
+                      "code": "INVALID_ROUTE_FOR_ENDPOINT",
+                      "message": "This endpoint only accepts SVT payload (ssuid + userId + componentName).",
+                      "correlationId": "svt-single-001"
+                    }
+                  },
+                  "invalidRequest": {
+                    "summary": "Missing or empty payload",
+                    "value": {
+                      "accepted": false,
+                      "code": "INVALID_REQUEST",
+                      "message": "Request payload is required.",
+                      "correlationId": "svt-single-001"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataRouteDecisionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BulkDataRouteDecisionRequest": {
+        "type": "object",
+        "properties": {
+          "bulkProcessorId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Bulk ingestion header identifier. Required for bulk routes."
+          },
+          "ssuIds": {
+            "type": "array",
+            "description": "SSU IDs for selection mode.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ssuId": {
+            "type": "string",
+            "description": "Single SSU ID for SVT mode."
+          },
+          "userId": {
+            "type": "string",
+            "description": "User identifier for SVT/submit scenarios."
+          },
+          "componentName": {
+            "type": "string",
+            "description": "Caller component name."
+          },
+          "requestedBy": {
+            "type": "string",
+            "description": "Optional submitter identifier."
+          },
+          "correlationId": {
+            "type": "string",
+            "description": "Optional correlation identifier for tracing."
+          }
+        }
+      },
+      "BulkDataRouteDecisionResponse": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "bulkProcessorId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string"
+          },
+          "sourceType": {
+            "type": "string"
+          },
+          "stagingStatus": {
+            "type": "string"
+          },
+          "receivedCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "ssuIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ssuId": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string"
+          },
+          "componentName": {
+            "type": "string"
+          },
+          "routeMode": {
+            "type": "string"
+          },
+          "statusReason": {
+            "type": "string"
+          },
+          "statusReasonCode": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "fileType": {
+            "type": "string"
+          },
+          "fileTypeCode": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "correlationId": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "apiKeyHeader": {
+        "type": "apiKey",
+        "name": "Ocp-Apim-Subscription-Key",
+        "in": "header"
+      },
+      "apiKeyQuery": {
+        "type": "apiKey",
+        "name": "subscription-key",
+        "in": "query"
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKeyHeader": []
+    },
+    {
+      "apiKeyQuery": []
+    }
+  ]
+}
