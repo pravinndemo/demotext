@@ -33,13 +33,7 @@ public class T_BulkDataTimerTrigger
     public async Task Run([TimerTrigger(TimerScheduleSettings.BulkIngestionTimerSchedule)] TimerInfo myTimer)
     {
         _logger.LogInformation($"T_BulkDataTimerTrigger executed at {DateTime.UtcNow}");
-
-        var createImmediately = Environment.GetEnvironmentVariable("BulkSubmitCreateImmediately") ?? "true";
-        if (bool.TryParse(createImmediately, out var createNow) && !createNow)
-        {
-            _logger.LogWarning(
-                "BulkSubmitCreateImmediately=false detected. Current timer processor does not create request/job records, so custom upsert and customer resolution checks are not exercised in timer flow.");
-        }
+        _logger.LogInformation("Queue-only bulk mode enabled: timer will create request/job records for queued bulk ingestions.");
 
         if (myTimer.ScheduleStatus is not null)
         {

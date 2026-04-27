@@ -11,6 +11,7 @@ using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Query;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
+using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Activities;
 
@@ -33,6 +34,8 @@ public class BulkIngestionProcessor
     private const string ItemLockedForProcessingColumn = "voa_lockedforprocessing";
     private const string ItemCanReprocessColumn = "voa_canreprocess";
     private const string ItemSsuIdColumn = "voa_ssuid";
+    private const string ItemRequestLookupColumn = "voa_requestlookup";
+    private const string ItemJobLookupColumn = "voa_joblookup";
 
     public BulkIngestionProcessor(
         IHttpClientFactory httpClientFactory,
@@ -97,17 +100,31 @@ public class BulkIngestionProcessor
 
         if (!validItems.Any())
         {
-            _logger.LogWarning("BulkIngestion [{Id}] has no valid items. Marking as Failed.", ingestion.Id);
-            await UpdateIngestionStatusAsync(ingestion.Id, StatusCodes.Failed);
+            var existingStatus = await DetermineFinalStatusFromExistingItemsAsync(ingestion.Id);
+            _logger.LogInformation(
+                "BulkIngestion [{Id}] has no valid items. Finalising from existing item statuses with status {Status}.",
+                ingestion.Id,
+                existingStatus);
+            await UpdateIngestionStatusAsync(ingestion.Id, existingStatus);
             ingestionSw.Stop();
             _logger.LogInformation(
                 "Performance.TimerIngestionSummary ProcessingRunId={ProcessingRunId} IngestionId={IngestionId} ValidItems=0 SuccessCount=0 FailureCount=0 Batches=0 FinalStatus={FinalStatus} TotalElapsedMs={TotalElapsedMs}",
                 processingRunId,
                 ingestion.Id,
-                StatusCodes.Failed,
+                existingStatus,
                 ingestionSw.ElapsedMilliseconds);
             return;
         }
+
+        var createRequestJobsInTimer = ShouldCreateRequestJobsInTimer();
+        var timerContext = createRequestJobsInTimer
+            ? await ResolveTimerCreationContextAsync(ingestion)
+            : null;
+
+        _logger.LogInformation(
+            "Timer mode for ingestion {IngestionId}: CreateRequestJobs={CreateRequestJobs}",
+            ingestion.Id,
+            createRequestJobsInTimer);
 
         var ingestionResult = new IngestionProcessingResult
         {
@@ -122,8 +139,9 @@ public class BulkIngestionProcessor
 
             _logger.LogInformation($"Batch {batchNumber} | {batch.Count} items");
 
-            List<ItemProcessingResult> batchResults =
-                await ProcessBatchWithRetryAsync(batch, batchNumber, processingRunId);
+            List<ItemProcessingResult> batchResults = createRequestJobsInTimer
+                ? await ProcessBatchWithRequestJobCreationAsync(batch, batchNumber, processingRunId, timerContext)
+                : await ProcessBatchWithRetryAsync(batch, batchNumber, processingRunId);
 
             foreach (var result in batchResults)
             {
@@ -154,22 +172,252 @@ public class BulkIngestionProcessor
             ingestionSw.ElapsedMilliseconds);
     }
 
-    private async Task<List<ItemProcessingResult>> ProcessBatchWithRetryAsync(
-        List<Entity> batch, int batchNumber, string processingRunId)
+    private async Task<List<ItemProcessingResult>> ProcessBatchWithRequestJobCreationAsync(
+        List<Entity> batch,
+        int batchNumber,
+        string processingRunId,
+        TimerCreationContext? timerContext)
     {
         var batchSw = Stopwatch.StartNew();
         var results = new List<ItemProcessingResult>();
 
-        var itemsToProcess = batch;
+        if (timerContext is null)
+        {
+            foreach (var item in batch)
+            {
+                await TryMarkItemAsFailedAsync(
+                    itemId: item.Id,
+                    stageCode: StatusCodes.StageRequestCreation,
+                    errorMessage: "TIMER_CREATION_CONTEXT_MISSING: Unable to resolve timer submit user or template settings.",
+                    canReprocess: false);
+
+                results.Add(new ItemProcessingResult
+                {
+                    ItemId = item.Id,
+                    Success = false,
+                    Error = "TIMER_CREATION_CONTEXT_MISSING"
+                });
+            }
+
+            return results;
+        }
+
         var checkCrossBatchDuplicates = GetBooleanFlag("BulkIngestionCheckCrossBatchDuplicates", false);
+        var crossBatchRejectedCount = 0;
+        var eligibleItems = new List<(Entity Entity, RequestJobCreateItem Payload)>(batch.Count);
+
+        foreach (var item in batch)
+        {
+            await UpdateItemProcessingStateAsync(
+                itemId: item.Id,
+                stageCode: StatusCodes.StageRequestCreation,
+                lockForProcessing: true,
+                incrementAttempt: true,
+                errorMessage: null,
+                canReprocess: true);
+
+            var ssuId = item.GetAttributeValue<string>(ItemSsuIdColumn)?.Trim() ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(ssuId))
+            {
+                await TryMarkItemAsFailedAsync(
+                    itemId: item.Id,
+                    stageCode: StatusCodes.StageRequestCreation,
+                    errorMessage: "INVALID_SSU_FORMAT: SSU ID is missing.",
+                    canReprocess: false);
+
+                results.Add(new ItemProcessingResult
+                {
+                    ItemId = item.Id,
+                    Success = false,
+                    Error = "INVALID_SSU_FORMAT"
+                });
+                continue;
+            }
+
+            var parentIngestionId = item.GetAttributeValue<EntityReference>(ItemParentLookupColumn)?.Id ?? Guid.Empty;
+            if (checkCrossBatchDuplicates &&
+                parentIngestionId != Guid.Empty &&
+                await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId))
+            {
+                await TryMarkItemAsFailedAsync(
+                    itemId: item.Id,
+                    stageCode: StatusCodes.StageValidation,
+                    errorMessage: "ERR_DUP_SSU_OTHER_BATCH: SSU ID already exists in another batch.",
+                    canReprocess: false);
+
+                crossBatchRejectedCount++;
+                results.Add(new ItemProcessingResult
+                {
+                    ItemId = item.Id,
+                    Success = false,
+                    Error = "ERR_DUP_SSU_OTHER_BATCH"
+                });
+                continue;
+            }
+
+            eligibleItems.Add((
+                item,
+                new RequestJobCreateItem
+                {
+                    SsuId = ssuId,
+                    SourceType = timerContext.SourceType,
+                    SourceValue = item.GetAttributeValue<string>("voa_sourcevalue") ?? ssuId,
+                }));
+        }
+
+        if (eligibleItems.Count == 0)
+        {
+            batchSw.Stop();
+            _logger.LogInformation(
+                "Performance.TimerCreateBatchSummary ProcessingRunId={ProcessingRunId} BatchNumber={BatchNumber} InputItems={InputItems} EligibleItems=0 CrossBatchRejected={CrossBatchRejected} SuccessCount={SuccessCount} FailureCount={FailureCount} ElapsedMs={ElapsedMs}",
+                processingRunId,
+                batchNumber,
+                batch.Count,
+                crossBatchRejectedCount,
+                results.Count(r => r.Success),
+                results.Count(r => !r.Success),
+                batchSw.ElapsedMilliseconds);
+            return results;
+        }
+
+        var creationService = new RequestJobCreationService(_crmService, _logger);
+        var batchCreateResult = await creationService.CreateBatchAsync(
+            eligibleItems.Select(item => item.Payload),
+            timerContext.SubmitUserId,
+            timerContext.ComponentName,
+            timerContext.SourceType,
+            jobTypeId: timerContext.JobTypeId,
+            createJob: timerContext.CreateJob);
+
+        var itemUpdateRequests = new List<OrganizationRequest>(eligibleItems.Count);
+        for (var index = 0; index < eligibleItems.Count; index++)
+        {
+            var item = eligibleItems[index].Entity;
+            var outcome = index < batchCreateResult.Results.Count
+                ? batchCreateResult.Results[index]
+                : new RequestJobCreateResult
+                {
+                    Success = false,
+                    ErrorCode = "MISSING_RESULT",
+                    ErrorMessage = "Creation service did not return a result for this item."
+                };
+
+            if (outcome.Success)
+            {
+                var update = new Entity(ItemEntityName, item.Id)
+                {
+                    [ItemValidationStatusColumn] = new OptionSetValue(StatusCodes.Processed),
+                    [ItemProcessingStageColumn] = new OptionSetValue(StatusCodes.StageCompleted),
+                    [ItemProcessingTimestampColumn] = DateTime.UtcNow,
+                    [ItemValidationFailureReasonColumn] = timerContext.CreateJob
+                        ? "Request/job created successfully."
+                        : "Request created successfully in Request Only mode.",
+                    [ItemLockedForProcessingColumn] = false,
+                    [ItemCanReprocessColumn] = false,
+                    [ItemRequestLookupColumn] = new EntityReference(timerContext.RequestEntityName, outcome.RequestId),
+                };
+
+                if (timerContext.CreateJob && outcome.JobId != Guid.Empty)
+                {
+                    update[ItemJobLookupColumn] = new EntityReference(timerContext.JobEntityName, outcome.JobId);
+                }
+
+                itemUpdateRequests.Add(new UpdateRequest { Target = update });
+                results.Add(new ItemProcessingResult { ItemId = item.Id, Success = true });
+            }
+            else
+            {
+                var isTransient = string.Equals(outcome.ErrorCode, "CREATION_FAILED", StringComparison.OrdinalIgnoreCase);
+                await TryMarkItemAsFailedAsync(
+                    itemId: item.Id,
+                    stageCode: StatusCodes.StageRequestCreation,
+                    errorMessage: $"{outcome.ErrorCode}: {outcome.ErrorMessage}",
+                    canReprocess: isTransient);
+
+                results.Add(new ItemProcessingResult
+                {
+                    ItemId = item.Id,
+                    Success = false,
+                    Error = $"{outcome.ErrorCode}: {outcome.ErrorMessage}"
+                });
+            }
+        }
+
+        if (itemUpdateRequests.Count > 0)
+        {
+            await RetryAsync(async () =>
+            {
+                var request = new ExecuteMultipleRequest
+                {
+                    Settings = new ExecuteMultipleSettings
+                    {
+                        ContinueOnError = true,
+                        ReturnResponses = true,
+                    },
+                    Requests = new OrganizationRequestCollection(),
+                };
+
+                foreach (var updateRequest in itemUpdateRequests)
+                {
+                    request.Requests.Add(updateRequest);
+                }
+
+                await _crmService.ExecuteAsync(request);
+                return true;
+            },
+            $"TimerCreateBatchUpdate {batchNumber}",
+            MaxRetries);
+        }
+
+        batchSw.Stop();
+        _logger.LogInformation(
+            "Performance.TimerCreateBatchSummary ProcessingRunId={ProcessingRunId} BatchNumber={BatchNumber} InputItems={InputItems} EligibleItems={EligibleItems} CrossBatchRejected={CrossBatchRejected} SuccessCount={SuccessCount} FailureCount={FailureCount} ElapsedMs={ElapsedMs}",
+            processingRunId,
+            batchNumber,
+            batch.Count,
+            eligibleItems.Count,
+            crossBatchRejectedCount,
+            results.Count(r => r.Success),
+            results.Count(r => !r.Success),
+            batchSw.ElapsedMilliseconds);
+
+        return results;
+    }
+
+    private async Task<List<ItemProcessingResult>> ProcessBatchWithRetryAsync(
+        List<Entity> batch, int batchNumber, string processingRunId)
+    {
+        // Start a stopwatch to measure total time spent on this batch.
+        // e.g. Batch 1 with 5 items — we want to know how long the whole thing took.
+        var batchSw = Stopwatch.StartNew();
+
+        // This list accumulates the outcome of every item in the batch (success or failure).
+        // Returned at the end so the caller can tally SuccessCount / FailureCount on the ingestion.
+        var results = new List<ItemProcessingResult>();
+
+        // By default, all items in the batch are eligible for processing.
+        // e.g. batch = [Item-A, Item-B, Item-C, Item-D, Item-E] → itemsToProcess points to the same list.
+        var itemsToProcess = batch;
+
+        // Read env var "BulkIngestionCheckCrossBatchDuplicates". Defaults to false if not set.
+        // When true, each item is checked against other batches for a duplicate SSU ID before processing.
+        var checkCrossBatchDuplicates = GetBooleanFlag("BulkIngestionCheckCrossBatchDuplicates", false);
+
+        // Tracks how many items were rejected as cross-batch duplicates — used in the performance log.
         var crossBatchRejectedCount = 0;
 
         if (checkCrossBatchDuplicates)
         {
+            // Reset itemsToProcess to a new empty list — items must pass the duplicate check to be added.
+            // e.g. batch has 5 items; we start with 0 eligible and build up as each item is inspected.
             itemsToProcess = new List<Entity>(batch.Count);
 
             foreach (var item in batch)
             {
+                // Lock this item in Dataverse immediately so no other timer run picks it up concurrently.
+                // Stage → StageValidation, incrementAttempt = true (this counts as an attempt).
+                // e.g. Item-A: voa_processingstage = StageValidation, voa_lockedforprocessing = true, voa_processingattemptcount = 1
                 await UpdateItemProcessingStateAsync(
                     itemId: item.Id,
                     stageCode: StatusCodes.StageValidation,
@@ -178,13 +426,24 @@ public class BulkIngestionProcessor
                     errorMessage: null,
                     canReprocess: true);
 
+                // Read the item's SSU ID and parent ingestion ID from the already-fetched entity attributes.
+                // Trim handles any whitespace. Falls back to empty/Guid.Empty if the attribute is null.
+                // e.g. Item-A: ssuId = "SSU-001", parentIngestionId = Guid("abc-123")
                 var ssuId = item.GetAttributeValue<string>(ItemSsuIdColumn)?.Trim() ?? string.Empty;
                 var parentIngestionId = item.GetAttributeValue<EntityReference>(ItemParentLookupColumn)?.Id ?? Guid.Empty;
 
+                // Three-part duplicate guard — Dataverse is only queried if the first two conditions pass:
+                //   1. parentIngestionId != Guid.Empty  →  the parent lookup is populated
+                //   2. ssuId is not blank               →  there is something to check
+                //   3. SsuIdExistsInOtherBatchesAsync   →  same SSU ID exists under a DIFFERENT parent ingestion
+                // e.g. Item-B: ssuId = "SSU-002" is found under a different parent → all three = true → rejected
                 if (parentIngestionId != Guid.Empty &&
                     !string.IsNullOrWhiteSpace(ssuId) &&
                     await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId))
                 {
+                    // Mark the item as permanently failed in Dataverse.
+                    // canReprocess = false because this is a data integrity issue, not a transient error.
+                    // e.g. Item-B: voa_validationstatus = ItemFailed, voa_canreprocess = false
                     await TryMarkItemAsFailedAsync(
                         itemId: item.Id,
                         stageCode: StatusCodes.StageValidation,
@@ -192,6 +451,8 @@ public class BulkIngestionProcessor
                         canReprocess: false);
                     crossBatchRejectedCount++;
 
+                    // Record the failure in results so the caller knows this item failed.
+                    // e.g. results now contains: [{ Item-B, Success=false, Error="ERR_DUP_SSU_OTHER_BATCH..." }]
                     results.Add(new ItemProcessingResult
                     {
                         ItemId = item.Id,
@@ -199,14 +460,34 @@ public class BulkIngestionProcessor
                         Error = "ERR_DUP_SSU_OTHER_BATCH: SSU ID already exists in another batch."
                     });
 
+                    // Skip to the next item — this one does NOT get added to itemsToProcess.
                     continue;
                 }
 
+                // Duplicate check passed — this item is safe to process.
+                // e.g. Item-A, Item-C, Item-D, Item-E all pass → itemsToProcess = [Item-A, Item-C, Item-D, Item-E]
                 itemsToProcess.Add(item);
+            }
+
+            // Transition all surviving items from StageValidation → StageRequestCreation.
+            // incrementAttempt = false — the attempt was already counted in the StageValidation write above.
+            // e.g. Item-A, Item-C, Item-D, Item-E: voa_processingstage = StageRequestCreation
+            foreach (var item in itemsToProcess)
+            {
+                await UpdateItemProcessingStateAsync(
+                    itemId: item.Id,
+                    stageCode: StatusCodes.StageRequestCreation,
+                    lockForProcessing: true,
+                    incrementAttempt: false,
+                    errorMessage: null,
+                    canReprocess: true);
             }
         }
         else
         {
+            // Flag is OFF — skip the duplicate check entirely.
+            // Lock all items and set stage to StageRequestCreation straight away.
+            // e.g. all 5 items: voa_processingstage = StageRequestCreation, voa_lockedforprocessing = true, attempt count +1
             foreach (var item in batch)
             {
                 await UpdateItemProcessingStateAsync(
@@ -219,17 +500,9 @@ public class BulkIngestionProcessor
             }
         }
 
-        foreach (var item in itemsToProcess)
-        {
-            await UpdateItemProcessingStateAsync(
-                itemId: item.Id,
-                stageCode: StatusCodes.StageRequestCreation,
-                lockForProcessing: true,
-                incrementAttempt: false,
-                errorMessage: null,
-                canReprocess: true);
-        }
-
+        // If every item was rejected as a cross-batch duplicate, there is nothing left to send to Dataverse.
+        // Log the summary and return early with just the rejection results.
+        // e.g. if all 5 items had duplicate SSU IDs, itemsToProcess is empty → return here.
         if (!itemsToProcess.Any())
         {
             batchSw.Stop();
@@ -245,19 +518,29 @@ public class BulkIngestionProcessor
             return results;
         }
 
+        // Send all eligible items to Dataverse in a single ExecuteMultipleRequest.
+        // ContinueOnError = true means individual item faults do NOT abort the whole batch.
+        // The whole call is wrapped in RetryAsync — if Dataverse throws (e.g. 503), it retries up to 3 times
+        // with exponential backoff: 500ms → 1000ms → 2000ms.
+        // e.g. 4 items → one network call containing 4 UpdateRequests.
         ExecuteMultipleResponse response = await RetryAsync(
             () => ExecuteBatchAsync(itemsToProcess),
             $"Batch {batchNumber}",
             MaxRetries);
 
+        // Collect items that had individual faults in the batch response for a second-chance retry.
         var failedItems = new List<Entity>();
 
         foreach (var item in response.Responses)
         {
+            // Match the response back to the original entity using the request index.
+            // e.g. response index 0 → Item-A, index 1 → Item-C, etc.
             Entity entity = itemsToProcess[item.RequestIndex];
 
             if (item.Fault == null)
             {
+                // Dataverse accepted this update — record as success.
+                // e.g. Item-A: voa_validationstatus = Processed, voa_processingstage = StageCompleted
                 results.Add(new ItemProcessingResult
                 {
                     ItemId = entity.Id,
@@ -266,6 +549,9 @@ public class BulkIngestionProcessor
             }
             else
             {
+                // Dataverse returned a fault for this specific item.
+                // Do not give up yet — queue it for an individual retry.
+                // e.g. Item-C failed in the batch → added to failedItems for RetrySingleItemAsync.
                 _logger.LogWarning($"Item {entity.Id} failed - retrying");
                 failedItems.Add(entity);
             }
@@ -273,10 +559,16 @@ public class BulkIngestionProcessor
 
         if (failedItems.Any())
         {
+            // Retry each failed item individually and concurrently.
+            // RetrySingleItemAsync will attempt up to 3 times, then classify the error as transient
+            // (canReprocess = true) or permanent (canReprocess = false) if all retries are exhausted.
+            // e.g. Item-C: retried individually → succeeds on attempt 2 → Success = true
             var retryTasks = failedItems.Select(RetrySingleItemAsync);
             results.AddRange(await Task.WhenAll(retryTasks));
         }
 
+        // Log the final batch summary with all counters for observability/performance tracking.
+        // e.g. InputItems=5 EligibleItems=4 CrossBatchRejected=1 SuccessCount=4 FailureCount=1 ElapsedMs=1234
         batchSw.Stop();
         _logger.LogInformation(
             "Performance.TimerBatchSummary ProcessingRunId={ProcessingRunId} BatchNumber={BatchNumber} InputItems={InputItems} EligibleItems={EligibleItems} CrossBatchRejected={CrossBatchRejected} SuccessCount={SuccessCount} FailureCount={FailureCount} ElapsedMs={ElapsedMs}",
@@ -289,6 +581,8 @@ public class BulkIngestionProcessor
             results.Count(result => !result.Success),
             batchSw.ElapsedMilliseconds);
 
+        // Return all results (successes + failures) to ProcessSingleIngestionAsync,
+        // which uses them to update SuccessCount / FailureCount on the parent ingestion record.
         return results;
     }
 
@@ -482,13 +776,136 @@ public class BulkIngestionProcessor
     {
         var query = new QueryExpression("voa_bulkingestion")
         {
-            ColumnSet = new ColumnSet("statuscode")
+            ColumnSet = new ColumnSet("statuscode", "ownerid", "createdby", "voa_processingjobtype", "voa_template")
         };
 
         query.Criteria.AddCondition("statuscode", ConditionOperator.Equal, StatusCodes.Queued);
 
         var result = await _crmService.RetrieveMultipleAsync(query);
         return result.Entities.ToList();
+    }
+
+    private bool ShouldCreateRequestJobsInTimer()
+    {
+        return true;
+    }
+
+    private async Task<TimerCreationContext?> ResolveTimerCreationContextAsync(Entity ingestion)
+    {
+        var submitUserRef = ingestion.GetAttributeValue<EntityReference>("ownerid")
+            ?? ingestion.GetAttributeValue<EntityReference>("createdby");
+
+        if (submitUserRef is null || submitUserRef.Id == Guid.Empty)
+        {
+            _logger.LogWarning("Could not resolve timer submit user for ingestion {IngestionId}", ingestion.Id);
+            return null;
+        }
+
+        var templateSettings = await ResolveTemplateProcessingSettingsAsync(ingestion);
+        if (!templateSettings.JobTypeId.HasValue || templateSettings.JobTypeId.Value == Guid.Empty)
+        {
+            _logger.LogWarning("Could not resolve template/header job type for ingestion {IngestionId}", ingestion.Id);
+            return null;
+        }
+
+        return new TimerCreationContext(
+            SubmitUserId: submitUserRef.Id.ToString(),
+            ComponentName: Environment.GetEnvironmentVariable("BulkTimerComponentName") ?? "BulkTimer",
+            SourceType: templateSettings.FormatLabel ?? "Bulk",
+            JobTypeId: templateSettings.JobTypeId.Value,
+            CreateJob: templateSettings.CreateJob,
+            RequestEntityName: Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem",
+            JobEntityName: Environment.GetEnvironmentVariable("SvtJobEntityLogicalName") ?? "incident");
+    }
+
+    private async Task<int> DetermineFinalStatusFromExistingItemsAsync(Guid ingestionId)
+    {
+        var query = new QueryExpression(ItemEntityName)
+        {
+            ColumnSet = new ColumnSet(ItemValidationStatusColumn, ItemCanReprocessColumn),
+            Criteria = new FilterExpression
+            {
+                Conditions =
+                {
+                    new ConditionExpression(ItemParentLookupColumn, ConditionOperator.Equal, ingestionId),
+                }
+            }
+        };
+
+        var allItems = await _crmService.RetrieveMultipleAsync(query);
+        if (allItems.Entities.Count == 0)
+        {
+            return StatusCodes.Failed;
+        }
+
+        var processedCount = allItems.Entities.Count(item =>
+            item.GetAttributeValue<OptionSetValue>(ItemValidationStatusColumn)?.Value == StatusCodes.Processed);
+        var failedItems = allItems.Entities.Where(item =>
+            item.GetAttributeValue<OptionSetValue>(ItemValidationStatusColumn)?.Value == StatusCodes.ItemFailed).ToList();
+
+        if (failedItems.Count == 0 && processedCount > 0)
+        {
+            return StatusCodes.Completed;
+        }
+
+        if (failedItems.Any(item => item.GetAttributeValue<bool?>(ItemCanReprocessColumn) == true))
+        {
+            return StatusCodes.Delayed;
+        }
+
+        if (processedCount > 0)
+        {
+            return StatusCodes.PartialSuccess;
+        }
+
+        return StatusCodes.Failed;
+    }
+
+    private async Task<TemplateProcessingSettings> ResolveTemplateProcessingSettingsAsync(Entity bulkProcessor)
+    {
+        var headerJobTypeRef = bulkProcessor.GetAttributeValue<EntityReference>("voa_processingjobtype");
+        var templateRef = bulkProcessor.GetAttributeValue<EntityReference>("voa_template");
+
+        if (templateRef is null)
+        {
+            return new TemplateProcessingSettings(headerJobTypeRef?.Id, true, false, null, null);
+        }
+
+        var templateEntityName = Environment.GetEnvironmentVariable("BulkIngestionTemplateEntityLogicalName") ?? "voa_bulkingestiontemplate";
+        var templateJobTypeColumnName = Environment.GetEnvironmentVariable("BulkIngestionTemplateJobTypeLookupColumnName") ?? "voa_jobtypelookup";
+        var templateCaseWorkModeColumnName = Environment.GetEnvironmentVariable("BulkIngestionTemplateCaseWorkModeColumnName") ?? "voa_caseworkmode";
+        var templateFormatColumnName = Environment.GetEnvironmentVariable("BulkIngestionTemplateFormatColumnName") ?? "voa_format";
+
+        try
+        {
+            var template = await _crmService.RetrieveAsync(
+                templateEntityName,
+                templateRef.Id,
+                new ColumnSet(templateJobTypeColumnName, templateCaseWorkModeColumnName, templateFormatColumnName));
+
+            var templateJobTypeRef = template.GetAttributeValue<EntityReference>(templateJobTypeColumnName);
+            var caseWorkModeCode = template.GetAttributeValue<OptionSetValue>(templateCaseWorkModeColumnName)?.Value;
+            var formatCode = template.GetAttributeValue<OptionSetValue>(templateFormatColumnName)?.Value;
+            var formatLabel = template.FormattedValues.TryGetValue(templateFormatColumnName, out var formattedFormat)
+                ? formattedFormat
+                : null;
+            var createJob = caseWorkModeCode != 358800000;
+
+            return new TemplateProcessingSettings(
+                templateJobTypeRef?.Id ?? headerJobTypeRef?.Id,
+                createJob,
+                true,
+                formatLabel,
+                formatCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to load template {TemplateId}; falling back to bulk header job type.",
+                templateRef.Id);
+            return new TemplateProcessingSettings(headerJobTypeRef?.Id, true, false, null, null);
+        }
     }
 
     private async Task<List<Entity>> RetrieveValidItemsAsync(Guid ingestionId)
@@ -602,6 +1019,16 @@ public class BulkIngestionProcessor
 
         return false;
     }
+
+    private sealed record TemplateProcessingSettings(Guid? JobTypeId, bool CreateJob, bool FromTemplate, string? FormatLabel, int? FormatCode);
+    private sealed record TimerCreationContext(
+        string SubmitUserId,
+        string ComponentName,
+        string SourceType,
+        Guid JobTypeId,
+        bool CreateJob,
+        string RequestEntityName,
+        string JobEntityName);
 }
 
 

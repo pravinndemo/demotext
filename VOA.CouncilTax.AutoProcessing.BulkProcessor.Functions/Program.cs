@@ -27,21 +27,26 @@ var host = new HostBuilder()
 	})
 	.ConfigureServices(services =>
 	{
+		var appInsightsConnectionString = Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING");
+
 		services.AddMemoryCache();
 		services.AddScoped<HttpLoggingHandler>();
 		services.AddLogging();
 
-		services.AddApplicationInsightsTelemetryWorkerService(options =>
+		if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
 		{
-			options.ConnectionString = Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING");
-		});
+			services.AddApplicationInsightsTelemetryWorkerService(options =>
+			{
+				options.ConnectionString = appInsightsConnectionString;
+			});
 
-		services.AddSingleton<ITelemetryInitializer, TelemetryInitializer>();
+			services.AddSingleton<ITelemetryInitializer, TelemetryInitializer>();
 
-		services.Configure<TelemetryConfiguration>(config =>
-		{
-			config.ConnectionString = Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING");
-		});
+			services.Configure<TelemetryConfiguration>(config =>
+			{
+				config.ConnectionString = appInsightsConnectionString;
+			});
+		}
 
 		services.AddSingleton<IOrganizationServiceAsync2>(_ =>
 		{

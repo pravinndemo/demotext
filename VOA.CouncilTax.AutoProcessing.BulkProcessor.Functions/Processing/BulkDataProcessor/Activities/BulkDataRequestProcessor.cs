@@ -276,8 +276,6 @@ public sealed class BulkDataRequestProcessor
 
         if (action == BulkRequestAction.SubmitBatch)
         {
-            var createImmediately = GetBooleanFlag("BulkSubmitCreateImmediately", defaultValue: true);
-
             if (!templateSettings.FromTemplate || string.IsNullOrWhiteSpace(templateSettings.FormatLabel))
             {
                 return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
@@ -317,76 +315,24 @@ public sealed class BulkDataRequestProcessor
                 });
             }
 
-            if (createImmediately)
+            if (!templateSettings.JobTypeId.HasValue || templateSettings.JobTypeId.Value == Guid.Empty)
             {
-                var submitUserId = ResolveSubmitUserId(request);
-                if (string.IsNullOrWhiteSpace(submitUserId))
+                return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
                 {
-                    return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
-                    {
-                        Accepted = false,
-                        Code = "USER_ID_REQUIRED_FOR_SUBMIT",
-                        Message = "SubmitBatch immediate-create mode requires a valid GUID user id. Provide userId or requestedBy as a GUID.",
-                        BulkProcessorId = request.BulkProcessorId,
-                        CorrelationId = request.CorrelationId,
-                        Action = action.ToString(),
-                    });
-                }
-
-                try
-                {
-                    if (!templateSettings.JobTypeId.HasValue || templateSettings.JobTypeId.Value == Guid.Empty)
-                    {
-                        return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
-                        {
-                            Accepted = false,
-                            Code = "JOB_TYPE_REQUIRED",
-                            Message = "Job Type is required. Configure Job Type on the selected template (voa_jobtypelookup) or set Processing Job Type on the bulk ingestion header.",
-                            BulkProcessorId = request.BulkProcessorId,
-                            CorrelationId = request.CorrelationId,
-                            Action = action.ToString(),
-                        });
-                    }
-
-                    var processingRunId = string.IsNullOrWhiteSpace(request.CorrelationId)
-                        ? Guid.NewGuid().ToString("N")
-                        : request.CorrelationId;
-
-                    var batchCreateResult = await CreateRequestsAndJobsForValidItemsAsync(
-                        bulkProcessorId: request.BulkProcessorId,
-                        submitUserId: submitUserId,
-                        componentName: request.ComponentName ?? "BulkSubmit",
-                        sourceType: decision.SourceType ?? "Bulk",
-                        correlationId: request.CorrelationId,
-                        jobTypeId: templateSettings.JobTypeId,
-                        createJob: templateSettings.CreateJob,
-                        processingRunId: processingRunId);
-
-                    var creationSummary = templateSettings.CreateJob
-                        ? "request/job records"
-                        : "request records";
-                    var modeLabel = templateSettings.CreateJob ? "Request and Job(s)" : "Request Only";
-                    var modeSourceLabel = templateSettings.FromTemplate ? "template" : "bulk header fallback";
-                    decision.Message += $" Mode={modeLabel} ({modeSourceLabel}). Created {batchCreateResult.CreatedCount} {creationSummary}; {batchCreateResult.FailedCount} failed.";
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(
-                        ex,
-                        "Bulk request/job creation failed for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
-                        request.BulkProcessorId,
-                        request.CorrelationId);
-                    decision.Message += " [Warning: request/job creation failed]";
-                }
+                    Accepted = false,
+                    Code = "JOB_TYPE_REQUIRED",
+                    Message = "Job Type is required. Configure Job Type on the selected template (voa_jobtypelookup) or set Processing Job Type on the bulk ingestion header.",
+                    BulkProcessorId = request.BulkProcessorId,
+                    CorrelationId = request.CorrelationId,
+                    Action = action.ToString(),
+                });
             }
-            else
-            {
-                _logger.LogInformation(
-                    "BulkSubmitCreateImmediately=false; skipping request/job creation for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
-                    request.BulkProcessorId,
-                    request.CorrelationId);
-                decision.Message += " Immediate request/job creation skipped (queue-only mode).";
-            }
+
+            _logger.LogInformation(
+                "SubmitBatch accepted in queue-only mode; timer will create request/job for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                request.BulkProcessorId,
+                request.CorrelationId);
+            decision.Message += " Request/job creation deferred to timer (queue-only mode).";
 
             // SubmitBatch is the only action that transitions batch status Draft -> Queued.
             try
