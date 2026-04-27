@@ -1,0 +1,77 @@
+Custom API -> HTTP SaveItems Checklist
+
+Send selection payload to Custom API and verify APIM forwards to POST /bulk-data/save-items.
+Validate happy-path payload (bulkProcessorId + ssuIds[]) returns accepted response and non-zero receivedCount.
+Validate CSV-file payload (bulkProcessorId + fileColumnName) returns accepted response.
+Verify header remains Draft after SaveItems.
+Verify items are created/updated with initial Pending, then validator updates to Valid/Invalid/Duplicate.
+Verify header counters are recalculated after SaveItems.
+Validate negative cases and exact error codes:
+Invalid JSON -> INVALID_JSON
+Null payload -> INVALID_REQUEST
+Missing bulkProcessorId for bulk -> BULK_PROCESSOR_ID_REQUIRED
+Endpoint/route mismatch -> INVALID_ROUTE_FOR_ENDPOINT
+Non-draft batch -> BATCH_NOT_DRAFT
+Confirm logs include performance markers for SaveItems phases (Performance.SaveItems*).
+C. Custom API -> HTTP SubmitBatch Checklist
+
+Call POST /bulk-data/submit-batch for the same draft batch after SaveItems.
+Verify prechecks:
+Template exists and has source format.
+totalRows > 0
+validItemCount > 0
+Validate negative cases and codes:
+Missing template/source -> TEMPLATE_SOURCE_REQUIRED
+No items -> NO_ITEMS_TO_SUBMIT
+No valid items -> NO_VALID_ITEMS_TO_SUBMIT
+Immediate mode with missing user -> USER_ID_REQUIRED_FOR_SUBMIT
+Missing job type -> JOB_TYPE_REQUIRED
+In immediate-create mode (BulkSubmitCreateImmediately=true):
+Verify valid items are processed.
+Verify item statuses become Processed or Failed.
+Verify request lookup populated; job lookup populated when mode is Request+Job.
+Verify header transition Draft -> Queued.
+Confirm logs include request/job creation performance markers (Performance.CreateRequestsJobs*).
+D. Timer Trigger Checklist
+
+Prepare at least one Queued ingestion with valid items.
+Run timer path (wait for schedule or invoke function in local test cycle).
+Verify timer discovers queued ingestions and starts a ProcessingRunId.
+Verify behavior when no valid items:
+Ingestion should become Failed.
+Verify batch processing path:
+Items processed in chunks.
+Cross-batch duplicate rejection works when enabled.
+Verify retry behavior:
+Batch execute retry up to max attempts.
+Per-item retry for failed items.
+Verify item-level updates:
+Success -> Processed, stage completed, unlock, clear failure reason.
+Failure -> ItemFailed, reason written, lock released, canReprocess set correctly.
+Verify final ingestion status logic:
+All success -> Completed
+Mixed with retryable failures -> Delayed or PartialSuccess (as per remaining retryable backlog)
+All failed non-retryable -> Failed
+Confirm timer performance logs exist:
+Performance.TimerRunSummary
+Performance.TimerIngestionSummary
+Performance.TimerBatchSummary
+E. Regression Matrix (minimum)
+
+Selection input: valid + invalid + duplicate in same batch.
+CSV input: valid CSV + missing file + malformed row + duplicate values.
+Mode split: Request Only and Request and Job(s).
+Submit behavior: immediate-create true and false.
+Duplicate policy: cross-batch duplicate check on/off.
+Non-draft protection: SaveItems/SubmitBatch should reject when header not Draft.
+Idempotency/repeat call: re-send same SaveItems payload and verify update semantics (no unwanted duplicates).
+F. Evidence to Capture Per Test
+
+Request payload (from Custom API side) and correlationId.
+HTTP response body and status code.
+Dataverse snapshots:
+Header status and counters.
+Item statuses and failure reasons.
+Request/job lookups.
+Function logs filtered by correlationId or ProcessingRunId.
+Final pass/fail verdict with observed vs expected status/error code.
