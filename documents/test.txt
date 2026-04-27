@@ -1,77 +1,60 @@
-Custom API -> HTTP SaveItems Checklist
+Confirm UI prerequisites.
+User can open Bulk Processor form with a valid bulkProcessorId.
+Required UI fields are populated before action buttons are enabled.
+Validate request shape from UI.
+Selection mode sends bulkProcessorId + ssuIds[].
+CSV mode sends bulkProcessorId + fileColumnName (file already stored in Dataverse).
+No mixed payload (SVT fields must not be sent from bulk UI actions).
+Validate client-side guards.
+Prevent submit when no items selected/uploaded.
+Show clear inline message for missing required fields.
+Disable duplicate-click submissions (debounce or in-flight lock).
+Validate headers and tracing.
+Send correlationId for every request.
+Send auth token expected by APIM/Custom API.
+Send content type application/json.
+Validate UI handling of Custom API responses.
+Success response updates UI state (accepted=true path).
+Validation errors show API code and friendly message.
+Transient failures show retry guidance and preserve user input.
+Validate negative payload tests from UI.
+Empty body.
+Invalid JSON (if possible via test harness).
+Missing bulkProcessorId.
+Invalid route combination.
+Validate observability.
+UI logs/store has request timestamp, correlationId, endpoint, result code.
+Support team can trace a UI request end-to-end using correlationId.
+Custom API -> Azure Function Checklist
 
-Send selection payload to Custom API and verify APIM forwards to POST /bulk-data/save-items.
-Validate happy-path payload (bulkProcessorId + ssuIds[]) returns accepted response and non-zero receivedCount.
-Validate CSV-file payload (bulkProcessorId + fileColumnName) returns accepted response.
-Verify header remains Draft after SaveItems.
-Verify items are created/updated with initial Pending, then validator updates to Valid/Invalid/Duplicate.
-Verify header counters are recalculated after SaveItems.
-Validate negative cases and exact error codes:
-Invalid JSON -> INVALID_JSON
-Null payload -> INVALID_REQUEST
-Missing bulkProcessorId for bulk -> BULK_PROCESSOR_ID_REQUIRED
-Endpoint/route mismatch -> INVALID_ROUTE_FOR_ENDPOINT
-Non-draft batch -> BATCH_NOT_DRAFT
-Confirm logs include performance markers for SaveItems phases (Performance.SaveItems*).
-C. Custom API -> HTTP SubmitBatch Checklist
-
-Call POST /bulk-data/submit-batch for the same draft batch after SaveItems.
-Verify prechecks:
-Template exists and has source format.
-totalRows > 0
-validItemCount > 0
-Validate negative cases and codes:
-Missing template/source -> TEMPLATE_SOURCE_REQUIRED
-No items -> NO_ITEMS_TO_SUBMIT
-No valid items -> NO_VALID_ITEMS_TO_SUBMIT
-Immediate mode with missing user -> USER_ID_REQUIRED_FOR_SUBMIT
-Missing job type -> JOB_TYPE_REQUIRED
-In immediate-create mode (BulkSubmitCreateImmediately=true):
-Verify valid items are processed.
-Verify item statuses become Processed or Failed.
-Verify request lookup populated; job lookup populated when mode is Request+Job.
-Verify header transition Draft -> Queued.
-Confirm logs include request/job creation performance markers (Performance.CreateRequestsJobs*).
-D. Timer Trigger Checklist
-
-Prepare at least one Queued ingestion with valid items.
-Run timer path (wait for schedule or invoke function in local test cycle).
-Verify timer discovers queued ingestions and starts a ProcessingRunId.
-Verify behavior when no valid items:
-Ingestion should become Failed.
-Verify batch processing path:
-Items processed in chunks.
-Cross-batch duplicate rejection works when enabled.
-Verify retry behavior:
-Batch execute retry up to max attempts.
-Per-item retry for failed items.
-Verify item-level updates:
-Success -> Processed, stage completed, unlock, clear failure reason.
-Failure -> ItemFailed, reason written, lock released, canReprocess set correctly.
-Verify final ingestion status logic:
-All success -> Completed
-Mixed with retryable failures -> Delayed or PartialSuccess (as per remaining retryable backlog)
-All failed non-retryable -> Failed
-Confirm timer performance logs exist:
-Performance.TimerRunSummary
-Performance.TimerIngestionSummary
-Performance.TimerBatchSummary
-E. Regression Matrix (minimum)
-
-Selection input: valid + invalid + duplicate in same batch.
-CSV input: valid CSV + missing file + malformed row + duplicate values.
-Mode split: Request Only and Request and Job(s).
-Submit behavior: immediate-create true and false.
-Duplicate policy: cross-batch duplicate check on/off.
-Non-draft protection: SaveItems/SubmitBatch should reject when header not Draft.
-Idempotency/repeat call: re-send same SaveItems payload and verify update semantics (no unwanted duplicates).
-F. Evidence to Capture Per Test
-
-Request payload (from Custom API side) and correlationId.
-HTTP response body and status code.
-Dataverse snapshots:
-Header status and counters.
-Item statuses and failure reasons.
-Request/job lookups.
-Function logs filtered by correlationId or ProcessingRunId.
-Final pass/fail verdict with observed vs expected status/error code.
+Confirm endpoint mapping in Custom API.
+Save-items maps to POST /bulk-data/save-items.
+Submit maps to POST /bulk-data/submit-batch.
+Optional SVT maps to POST /bulk-data/svt-single only for SVT flow.
+Validate forwarded payload contract.
+Forward fields without mutation/loss: bulkProcessorId, ssuIds, fileColumnName, requestedBy, correlationId.
+Ensure null/empty fields are handled consistently (not silently dropped if required downstream).
+Validate authentication and network.
+Managed identity/key config from Custom API to Function is valid.
+Function URL/route and APIM backend config are correct in each environment.
+Timeout settings allow expected function latency for staging calls.
+Validate response propagation.
+Pass through Function accepted, code, message, and correlationId.
+Preserve meaningful HTTP status behavior for callers.
+Do not replace specific Function error codes with generic ones.
+Validate Function-side rule enforcement through API.
+Route mismatches return expected code (INVALID_ROUTE_FOR_ENDPOINT).
+Bulk actions without bulkProcessorId return BULK_PROCESSOR_ID_REQUIRED.
+Submit prechecks return expected codes (NO_ITEMS_TO_SUBMIT, NO_VALID_ITEMS_TO_SUBMIT, etc.).
+Validate status transition outcomes.
+SaveItems keeps batch in Draft.
+Submit attempts Draft -> Queued.
+Item statuses update correctly (Pending/Valid/Invalid/Duplicate/Processed/Failed).
+Validate resilience.
+Retry policy at API gateway layer does not create duplicate processing.
+Idempotency behavior is verified for repeated same payload.
+Correlation is preserved across retries and failures.
+Validate logging and diagnostics.
+Custom API logs inbound request + outbound Function call + response.
+Azure Function logs include same correlationId.
+Dashboard/query can trace UI -> Custom API -> Function in one search.
