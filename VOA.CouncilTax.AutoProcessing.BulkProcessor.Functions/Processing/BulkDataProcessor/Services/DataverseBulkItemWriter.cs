@@ -1,10 +1,10 @@
 using Microsoft.PowerPlatform.Dataverse.Client;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Messages;
-using system;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using system.Threading.Tasks;
+using System.Threading.Tasks;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
 

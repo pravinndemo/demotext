@@ -12,7 +12,7 @@ using Microsoft.Xrm.Sdk.Query;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
-using VOA.CouncilTax.AutoProcessing.Consequential.Constants;
+//using VOA.CouncilTax.AutoProcessing.Consequential.Constants;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Activities;
 

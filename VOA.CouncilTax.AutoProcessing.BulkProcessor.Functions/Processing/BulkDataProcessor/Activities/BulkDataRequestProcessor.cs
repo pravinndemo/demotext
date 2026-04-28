@@ -11,7 +11,6 @@ using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataP
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Routing;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
-using VOA.CouncilTax.AutoProcessing.Processing.Consequential.Activites;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Activities;
 
@@ -163,8 +162,8 @@ public sealed class BulkDataRequestProcessor
                     Action = "SvtSingle",
                 })
                 {
-                    StatusCode = StatusCodes.Status500InternalServerError,
-                };
+                    StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError,
+                };  
             }
         }
 
@@ -221,7 +220,7 @@ public sealed class BulkDataRequestProcessor
                 CorrelationId = request.CorrelationId,
             })
             {
-                StatusCode = StatusCodes.Status500InternalServerError,
+                StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError,
             };
         }
 
@@ -360,6 +359,9 @@ public sealed class BulkDataRequestProcessor
                 decision.Message += " [Warning: Status transition failed]";
             }
 
+            var bulkIngestionItemEntityName = Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
+            var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
+
             var submitWarning = await GetCrossBatchDuplicateWarningAsync(
                 request.BulkProcessorId,
                 bulkProcessorEntityName,
@@ -405,7 +407,7 @@ public sealed class BulkDataRequestProcessor
                     Action = action.ToString(),
                 })
                 {
-                    StatusCode = StatusCodes.Status500InternalServerError,
+                    StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError,
                 };
             }
         }
@@ -429,19 +431,14 @@ public sealed class BulkDataRequestProcessor
     Entity bulkIngestion = bulkIngestionCollection.Entities.FirstOrDefault();
 
     var saveItemsSw = Stopwatch.StartNew();
-
     var bulkIngestionItemEntityName =
         Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
-
     var bulkIngestionItemParentLookupColumnName =
         Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
-
     var ssuIdColumnName =
         Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_hereditament";
-
     var sourceValueColumnName =
         Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_source";
-
     var validationStatusColumnName =
         Environment.GetEnvironmentVariable("BulkInestionItemValidationStatusColumnName") ?? "voa_validationstatus";
 
@@ -546,10 +543,6 @@ public sealed class BulkDataRequestProcessor
         foreach (var ssuId in request.SsuIds)
         {
             Entity itemEntity;
-            ParameterCollection parameters = new ParameterCollection
-            {
-                { "HereditamentId", ssuId.StatutorySpatialUnitId }
-            };
 
             upsertRequest.Requests.Add(UpsertRequest(ssuId.StatutorySpatialUnitId));
 
@@ -594,7 +587,7 @@ public sealed class BulkDataRequestProcessor
         {
             var parseCsvSw = Stopwatch.StartNew();
 
-            var csvRows = await csvParser.RetrieveSsuIdFromFile(
+            var csvRows = await csvParser.RetriveSsuIdFromFile(
                 bulkProcessorId,
                 bulkProcessorEntityName,
                 fileColumnName);
@@ -670,37 +663,35 @@ public sealed class BulkDataRequestProcessor
     {
         var writeSw = Stopwatch.StartNew();
 
-        ExecuteMultipleResponse bulkRequestResponse =
-            (ExecuteMultipleResponse)await _dataverseService.ExecuteAsync(upsertRequest);
+        await _dataverseService.ExecuteAsync(upsertRequest);
 
-        var writeResult =
-            bulkItemWriter.ExecuteItemRequests(bulkDataIngestionItemRequests);
+        var writeResult = await bulkItemWriter.ExecuteItemRequestsAsync(bulkDataIngestionItemRequests);
 
         writeSw.Stop();
 
         _logger.LogInformation(
             "Batch upsert completed for batch {BulkProcessorId}: {SuccessCount} succeeded, {FailureCount} failed. CorrelationId: {CorrelationId}",
             bulkProcessorId,
-            writeResult.Result.SucceededOperationCount,
-            writeResult.Result.FailedOperationCount,
+            writeResult.SucceededOperationCount,
+            writeResult.FailedOperationCount,
             request.CorrelationId);
 
         _logger.LogInformation(
             "Performance.SaveItemsWrite Batch={BulkProcessorId} Requested={Requested} Succeeded={Succeeded} Failed={Failed} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
             bulkProcessorId,
-            writeResult.Result.RequestedOperationCount,
-            writeResult.Result.SucceededOperationCount,
-            writeResult.Result.FailedOperationCount,
+            writeResult.RequestedOperationCount,
+            writeResult.SucceededOperationCount,
+            writeResult.FailedOperationCount,
             writeSw.ElapsedMilliseconds,
             request.CorrelationId);
 
-        if (writeResult.Result.Errors.Count > 0)
+        if (writeResult.Errors.Count > 0)
         {
             _logger.LogWarning(
                 "Errors during batch write for batch {BulkProcessorId}: {ErrorCount} errors. First error: {FirstError}. CorrelationId: {CorrelationId}",
                 bulkProcessorId,
-                writeResult.Result.Errors.Count,
-                writeResult.Result.Errors.FirstOrDefault() ?? "N/A",
+                writeResult.Errors.Count,
+                writeResult.Errors.FirstOrDefault() ?? "N/A",
                 request.CorrelationId);
         }
     }
@@ -860,6 +851,7 @@ public sealed class BulkDataRequestProcessor
         string? processingRunId = null)
     {
         var createFlowSw = Stopwatch.StartNew();
+        var bulkProcessorEntityName = Environment.GetEnvironmentVariable("BulkProcessorEntityLogicalName") ?? "voa_bulkingestion";
         var bulkIngestionItemEntityName = Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
         var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
         var ssuIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_ssuid";
@@ -940,7 +932,7 @@ public sealed class BulkDataRequestProcessor
                         SourceType = sourceType,
                         ErrorCode = "ERR_DUP_SSU_OTHER_BATCH",
                         ErrorMessage = duplicateMessage,
-                        FailureStageCode = StatusCodes.StageValidation,
+                        FailureStageCode = Constants.StatusCodes.StageValidation,
                     });
 
                     failedByEntityId[item.EntityId] = duplicateFailures[^1];
@@ -1017,8 +1009,8 @@ public sealed class BulkDataRequestProcessor
                     ? (createJob ? "Request/job created successfully." : "Request created successfully in Request Only mode.")
                     : $"{outcome.ErrorCode}: {outcome.ErrorMessage}",
                 [processingStageColumnName] = outcome.Success
-                    ? new OptionSetValue(StatusCodes.StageCompleted)
-                    : new OptionSetValue(outcome.FailureStageCode ?? StatusCodes.StageRequestCreation),
+                    ? new OptionSetValue(Constants.StatusCodes.StageCompleted)
+                    : new OptionSetValue(outcome.FailureStageCode ?? Constants.StatusCodes.StageRequestCreation),
                 [processingTimestampColumnName] = DateTime.UtcNow,
                 [processingAttemptCountColumnName] = item.AttemptCount + 1,
             };
@@ -1048,7 +1040,7 @@ public sealed class BulkDataRequestProcessor
         {
             var updateItemsSw = Stopwatch.StartNew();
             var bulkWriter = new DataverseBulkItemWriter(_dataverseService);
-            bulkWriter.ExecuteItemRequests(updateRequests);
+            await bulkWriter.ExecuteItemRequestsAsync(updateRequests);
 
             // Refresh parent counters after processing outcomes.
             var allItemsQuery = new QueryExpression(bulkIngestionItemEntityName)
