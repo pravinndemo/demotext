@@ -126,12 +126,24 @@ public sealed class BulkItemValidator
                 // Rule 6: Optional cross-batch duplicate check
                 else if (checkCrossBatchDuplicates)
                 {
-                    var conflictingBatches = await SsuIdExistsInOtherBatchesAsync(
-                        bulkProcessorId,
-                        ssuId,
-                        bulkIngestionItemEntityName,
-                        bulkIngestionItemParentLookupColumnName,
-                        ssuIdColumnName);
+                    List<CrossBatchDuplicateBatchInfo> conflictingBatches;
+                    try
+                    {
+                        conflictingBatches = await CrossBatchDuplicateLookupService.FindConflictingBatchesAsync(
+                            _dataverseService,
+                            _logger,
+                            bulkProcessorId,
+                            ssuId,
+                            bulkIngestionItemEntityName,
+                            bulkIngestionItemParentLookupColumnName,
+                            ssuIdColumnName,
+                            "voa_bulkingestion");
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error checking if SSU ID {SsuId} exists in other batches", ssuId);
+                        conflictingBatches = new List<CrossBatchDuplicateBatchInfo>();
+                    }
 
                     if (conflictingBatches.Count > 0)
                     {
@@ -225,94 +237,6 @@ public sealed class BulkItemValidator
         return bool.TryParse(raw, out var parsed) ? parsed : defaultValue;
     }
 
-    /// <summary>
-    /// Checks if an SSU ID already exists in other batches (for duplicate detection across batches).
-    /// </summary>
-    public async Task<List<CrossBatchDuplicateBatchInfo>> SsuIdExistsInOtherBatchesAsync(
-        Guid bulkProcessorId,
-        string ssuId,
-        string bulkIngestionItemEntityName,
-        string bulkIngestionItemParentLookupColumnName,
-        string ssuIdColumnName)
-    {
-        try
-        {
-            var query = new QueryExpression(bulkIngestionItemEntityName)
-            {
-                ColumnSet = new ColumnSet(bulkIngestionItemParentLookupColumnName),
-                PageInfo = new PagingInfo { PageNumber = 1, Count = 5000 },
-                Criteria = new FilterExpression()
-                {
-                    Conditions =
-                    {
-                        new ConditionExpression(ssuIdColumnName, ConditionOperator.Equal, ssuId),
-                        new ConditionExpression(bulkIngestionItemParentLookupColumnName, ConditionOperator.NotEqual, bulkProcessorId),
-                    //  new ConditionExpression("voa_validationstatus", ConditionOperator.NotIn,[StatusCodes.Pending, StatusCodes.Valid])
-                    }
-                }
-            };
-
-            var conflictBatchIds = new HashSet<Guid>();
-            do
-            {
-                var result = await _dataverseService.RetrieveMultipleAsync(query);
-                foreach (var entity in result.Entities)
-                {
-                    var parentBatch = entity.GetAttributeValue<EntityReference>(bulkIngestionItemParentLookupColumnName);
-                    if (parentBatch is null || parentBatch.Id == Guid.Empty || parentBatch.Id == bulkProcessorId)
-                    {
-                        continue;
-                    }
-
-                    conflictBatchIds.Add(parentBatch.Id);
-                }
-
-                if (!result.MoreRecords)
-                {
-                    break;
-                }
-
-                query.PageInfo.PageNumber++;
-                query.PageInfo.PagingCookie = result.PagingCookie;
-            } while (true);
-
-            var conflicts = new List<CrossBatchDuplicateBatchInfo>(conflictBatchIds.Count);
-            foreach (var conflictBatchId in conflictBatchIds)
-            {
-                string batchName = string.Empty;
-
-                try
-                {
-                    var batch = await _dataverseService.RetrieveAsync(
-                        "voa_bulkingestion",
-                        conflictBatchId,
-                        new ColumnSet("voa_name"));
-                    batchName = batch.GetAttributeValue<string>("voa_name")?.Trim() ?? string.Empty;
-                }
-                catch (Exception lookupEx)
-                {
-                    _logger.LogWarning(
-                        lookupEx,
-                        "Unable to resolve batch name for duplicate SSU {SsuId} in batch {BatchId}",
-                        ssuId,
-                        conflictBatchId);
-                }
-
-                conflicts.Add(new CrossBatchDuplicateBatchInfo
-                {
-                    BatchId = conflictBatchId,
-                    BatchName = batchName,
-                });
-            }
-
-            return conflicts;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error checking if SSU ID {SsuId} exists in other batches", ssuId);
-            return new List<CrossBatchDuplicateBatchInfo>();
-        }
-    }
 }
 
 /// <summary>

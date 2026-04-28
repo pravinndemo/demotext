@@ -241,7 +241,15 @@ public class BulkIngestionProcessor
             if (checkCrossBatchDuplicates &&
                 parentIngestionId != Guid.Empty)
             {
-                conflictingBatches = await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId);
+                conflictingBatches = await CrossBatchDuplicateLookupService.FindConflictingBatchesAsync(
+                    _crmService,
+                    _logger,
+                    parentIngestionId,
+                    ssuId,
+                    ItemEntityName,
+                    ItemParentLookupColumn,
+                    ItemSsuIdColumn,
+                    "voa_bulkingestion");
             }
 
             if (conflictingBatches.Count > 0)
@@ -451,7 +459,15 @@ public class BulkIngestionProcessor
                 if (parentIngestionId != Guid.Empty &&
                     !string.IsNullOrWhiteSpace(ssuId))
                 {
-                    conflictingBatches = await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId);
+                    conflictingBatches = await CrossBatchDuplicateLookupService.FindConflictingBatchesAsync(
+                        _crmService,
+                        _logger,
+                        parentIngestionId,
+                        ssuId,
+                        ItemEntityName,
+                        ItemParentLookupColumn,
+                        ItemSsuIdColumn,
+                        "voa_bulkingestion");
                 }
 
                 if (conflictingBatches.Count > 0)
@@ -601,78 +617,6 @@ public class BulkIngestionProcessor
         // Return all results (successes + failures) to ProcessSingleIngestionAsync,
         // which uses them to update SuccessCount / FailureCount on the parent ingestion record.
         return results;
-    }
-
-    private async Task<List<CrossBatchDuplicateBatchInfo>> SsuIdExistsInOtherBatchesAsync(Guid parentIngestionId, string ssuId)
-    {
-        var query = new QueryExpression(ItemEntityName)
-        {
-            ColumnSet = new ColumnSet(ItemParentLookupColumn),
-            PageInfo = new PagingInfo { PageNumber = 1, Count = 5000 },
-            Criteria = new FilterExpression
-            {
-                Conditions =
-                {
-                    new ConditionExpression(ItemSsuIdColumn, ConditionOperator.Equal, ssuId),
-                    new ConditionExpression(ItemParentLookupColumn, ConditionOperator.NotEqual, parentIngestionId),
-                }
-            }
-        };
-
-        var conflictBatchIds = new HashSet<Guid>();
-        do
-        {
-            var result = await _crmService.RetrieveMultipleAsync(query);
-            foreach (var entity in result.Entities)
-            {
-                var parentBatch = entity.GetAttributeValue<EntityReference>(ItemParentLookupColumn);
-                if (parentBatch is null || parentBatch.Id == Guid.Empty || parentBatch.Id == parentIngestionId)
-                {
-                    continue;
-                }
-
-                conflictBatchIds.Add(parentBatch.Id);
-            }
-
-            if (!result.MoreRecords)
-            {
-                break;
-            }
-
-            query.PageInfo.PageNumber++;
-            query.PageInfo.PagingCookie = result.PagingCookie;
-        } while (true);
-
-        var conflicts = new List<CrossBatchDuplicateBatchInfo>(conflictBatchIds.Count);
-        foreach (var conflictBatchId in conflictBatchIds)
-        {
-            string batchName = string.Empty;
-
-            try
-            {
-                var batch = await _crmService.RetrieveAsync(
-                    "voa_bulkingestion",
-                    conflictBatchId,
-                    new ColumnSet("voa_name"));
-                batchName = batch.GetAttributeValue<string>("voa_name")?.Trim() ?? string.Empty;
-            }
-            catch (Exception lookupEx)
-            {
-                _logger.LogWarning(
-                    lookupEx,
-                    "Unable to resolve batch name for duplicate SSU {SsuId} in batch {BatchId}",
-                    ssuId,
-                    conflictBatchId);
-            }
-
-            conflicts.Add(new CrossBatchDuplicateBatchInfo
-            {
-                BatchId = conflictBatchId,
-                BatchName = batchName,
-            });
-        }
-
-        return conflicts;
     }
 
     private static bool GetBooleanFlag(string key, bool defaultValue)

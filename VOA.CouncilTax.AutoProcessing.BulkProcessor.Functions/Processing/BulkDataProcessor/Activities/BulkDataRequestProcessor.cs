@@ -665,33 +665,33 @@ public sealed class BulkDataRequestProcessor
 
         await _dataverseService.ExecuteAsync(upsertRequest);
 
-        var writeResult = await bulkItemWriter.ExecuteItemRequestsAsync(bulkDataIngestionItemRequests);
+        var writeResult = bulkItemWriter.ExecuteItemRequestsAsync(bulkDataIngestionItemRequests);
 
         writeSw.Stop();
 
         _logger.LogInformation(
             "Batch upsert completed for batch {BulkProcessorId}: {SuccessCount} succeeded, {FailureCount} failed. CorrelationId: {CorrelationId}",
             bulkProcessorId,
-            writeResult.SucceededOperationCount,
-            writeResult.FailedOperationCount,
+            writeResult.Result.SucceededOperationCount,
+            writeResult.Result.FailedOperationCount,
             request.CorrelationId);
 
         _logger.LogInformation(
             "Performance.SaveItemsWrite Batch={BulkProcessorId} Requested={Requested} Succeeded={Succeeded} Failed={Failed} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
             bulkProcessorId,
-            writeResult.RequestedOperationCount,
-            writeResult.SucceededOperationCount,
-            writeResult.FailedOperationCount,
+            writeResult.Result.RequestedOperationCount,
+            writeResult.Result.SucceededOperationCount,
+            writeResult.Result.FailedOperationCount,
             writeSw.ElapsedMilliseconds,
             request.CorrelationId);
 
-        if (writeResult.Errors.Count > 0)
+        if (writeResult.Result.Errors.Count > 0)
         {
             _logger.LogWarning(
                 "Errors during batch write for batch {BulkProcessorId}: {ErrorCount} errors. First error: {FirstError}. CorrelationId: {CorrelationId}",
                 bulkProcessorId,
-                writeResult.Errors.Count,
-                writeResult.Errors.FirstOrDefault() ?? "N/A",
+                writeResult.Result.Errors.Count,
+                writeResult.Result.Errors.FirstOrDefault() ?? "N/A",
                 request.CorrelationId);
         }
     }
@@ -913,7 +913,9 @@ public sealed class BulkDataRequestProcessor
         {
             foreach (var item in createItems)
             {
-                var conflictingBatches = await SsuIdExistsInOtherBatchesAsync(
+                var conflictingBatches = await CrossBatchDuplicateLookupService.FindConflictingBatchesAsync(
+                    _dataverseService,
+                    _logger,
                     bulkProcessorId,
                     item.Payload.SsuId,
                     bulkIngestionItemEntityName,
@@ -1091,84 +1093,6 @@ public sealed class BulkDataRequestProcessor
             correlationId);
 
         return createResult;
-    }
-
-    private async Task<List<CrossBatchDuplicateBatchInfo>> SsuIdExistsInOtherBatchesAsync(
-        Guid bulkProcessorId,
-        string ssuId,
-        string bulkIngestionItemEntityName,
-        string bulkIngestionItemParentLookupColumnName,
-        string ssuIdColumnName,
-        string bulkProcessorEntityName)
-    {
-        var query = new QueryExpression(bulkIngestionItemEntityName)
-        {
-            ColumnSet = new ColumnSet(bulkIngestionItemParentLookupColumnName),
-            PageInfo = new PagingInfo { PageNumber = 1, Count = 5000 },
-            Criteria = new FilterExpression
-            {
-                Conditions =
-                {
-                    new ConditionExpression(ssuIdColumnName, ConditionOperator.Equal, ssuId),
-                    new ConditionExpression(bulkIngestionItemParentLookupColumnName, ConditionOperator.NotEqual, bulkProcessorId),
-                }
-            }
-        };
-
-        var conflictBatchIds = new HashSet<Guid>();
-        do
-        {
-            var result = await _dataverseService.RetrieveMultipleAsync(query);
-            foreach (var entity in result.Entities)
-            {
-                var parentBatch = entity.GetAttributeValue<EntityReference>(bulkIngestionItemParentLookupColumnName);
-                if (parentBatch is null || parentBatch.Id == Guid.Empty || parentBatch.Id == bulkProcessorId)
-                {
-                    continue;
-                }
-
-                conflictBatchIds.Add(parentBatch.Id);
-            }
-
-            if (!result.MoreRecords)
-            {
-                break;
-            }
-
-            query.PageInfo.PageNumber++;
-            query.PageInfo.PagingCookie = result.PagingCookie;
-        } while (true);
-
-        var conflicts = new List<CrossBatchDuplicateBatchInfo>(conflictBatchIds.Count);
-        foreach (var conflictBatchId in conflictBatchIds)
-        {
-            string batchName = string.Empty;
-
-            try
-            {
-                var batch = await _dataverseService.RetrieveAsync(
-                    bulkProcessorEntityName,
-                    conflictBatchId,
-                    new ColumnSet("voa_name"));
-                batchName = batch.GetAttributeValue<string>("voa_name")?.Trim() ?? string.Empty;
-            }
-            catch (Exception lookupEx)
-            {
-                _logger.LogWarning(
-                    lookupEx,
-                    "Unable to resolve batch name for duplicate SSU {SsuId} in batch {BatchId}",
-                    ssuId,
-                    conflictBatchId);
-            }
-
-            conflicts.Add(new CrossBatchDuplicateBatchInfo
-            {
-                BatchId = conflictBatchId,
-                BatchName = batchName,
-            });
-        }
-
-        return conflicts;
     }
 
     private async Task<TemplateProcessingSettings> ResolveTemplateProcessingSettingsAsync(Entity bulkProcessor)
