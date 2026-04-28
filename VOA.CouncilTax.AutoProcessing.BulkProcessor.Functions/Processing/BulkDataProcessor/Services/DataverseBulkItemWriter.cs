@@ -1,6 +1,10 @@
 using Microsoft.PowerPlatform.Dataverse.Client;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Messages;
+using system;
+using System.Collections.Generic;
+using System.Linq;
+using system.Threading.Tasks;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
 
@@ -15,7 +19,7 @@ public sealed class DataverseBulkItemWriter
         _dataverseService = dataverseService;
     }
 
-    public BulkItemWriteResult ExecuteItemRequests(IEnumerable<OrganizationRequest> requests, int batchSize = DefaultBatchSize)
+    public async Task<BulkItemWriteResult> ExecuteItemRequestsAsync(IEnumerable<OrganizationRequest> requests, int batchSize = DefaultBatchSize)
     {
         ArgumentNullException.ThrowIfNull(requests);
 
@@ -47,7 +51,7 @@ public sealed class DataverseBulkItemWriter
                 executeMultipleRequest.Requests.Add(request);
             }
 
-            var response = (ExecuteMultipleResponse)_dataverseService.Execute(executeMultipleRequest);
+            var response = (ExecuteMultipleResponse) await _dataverseService.ExecuteAsync(executeMultipleRequest);
             MergeBatchResult(chunk.Count, response, result);
         }
 

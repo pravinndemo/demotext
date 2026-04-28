@@ -105,5 +105,29 @@ public static class FetcherXMLHelper
   </entity>
 </fetch>";
     }
+
+/// <summary>
+/// Retrieves a bulk ingestion record by its ID.
+/// </summary>
+/// <param name="bulkIngestionId">The ID of the bulk ingestion record to retrieve.</param>
+/// <returns>A FetchXML query string to retrieve the specified bulk ingestion record.</returns>
+    public static string getBulkIngestionFromID(string bulkIngestionId)
+    {
+        string fetchXML = $@"<fetch>
+    <entity name='voa_bulkingestion'>
+    <attribute name='voa_bulkingestionid'/>
+    <attribute name='voa_name'/>
+    <attribute name='createdon'/>
+    <attribute name='voa_assignedteam'/>
+    <attribute name='voa_assignedmanager'/>
+    <attribute name='voa_assignmentmode'/>
+    <filter type='and'>
+    <condition attribute='voa_bulkingestionid' operator='eq' value='{bulkIngestionId}'/>
+    </filter>
+    </entity>
+    </fetch>";
+
+        return fetchXML;
+    }
 }
 

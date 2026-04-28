@@ -19,88 +19,184 @@ internal sealed class DirectJobCreationService
     }
 
     public Guid CreateJobForRequest(Guid requestId, RequestJobCreateItem item, Guid userId, string componentName)
+{
+    var requestEntityName = Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
+    var requestLookupColumnName = Environment.GetEnvironmentVariable("JobParentRequestLookupColumnName") ?? ConfigurationValues.ParentRequest;
+    var jobTypeColumnName = Environment.GetEnvironmentVariable("JobTypeColumnName") ?? ConfigurationValues.JobType;
+    var requestTypeColumnName = Environment.GetEnvironmentVariable("JobRequestTypeLookupColumnName") ?? "voa_requesttypeid";
+    var targetDateColumnName = Environment.GetEnvironmentVariable("JobTargetDateColumnName") ?? "voa_targetdate";
+    var customerColumnName = Environment.GetEnvironmentVariable("JobCustomerColumnName") ?? "customerid";
+    var titleColumnName = Environment.GetEnvironmentVariable("JobTitleColumnName") ?? "title";
+    var descriptionColumnName = Environment.GetEnvironmentVariable("JobDescriptionColumnName") ?? "description";
+
+    var requestSubmittedByColumnName =
+        Environment.GetEnvironmentVariable("RequestSubmittedByLookupColumnName") ?? "voa_customer2id";
+
+    var requestRatepayerColumnName =
+        Environment.GetEnvironmentVariable("RequestRatepayerLookupColumnName") ?? "voa_customeraccountid";
+
+    var requestTargetDateColumnName =
+        Environment.GetEnvironmentVariable("RequestTargetDateColumnName") ?? "voa_targetdate";
+
+    var requestRemarksColumnName =
+        Environment.GetEnvironmentVariable("RequestRemarksColumnName") ?? "voa_remarks";
+
+    var requestProposedBillingAuthorityColumnName =
+        Environment.GetEnvironmentVariable("RequestProposedBillingAuthorityLookupColumnName")
+        ?? ConfigurationValues.ProposedBillingAuthority;
+
+    var requestSsuLookupColumnName =
+        Environment.GetEnvironmentVariable("RequestSsuLookupColumnName") ?? "voa_statutoryspatialunitid";
+
+    var requestRequestTypeColumnName =
+        Environment.GetEnvironmentVariable("RequestRequestTypeLookupColumnName") ?? "voa_requesttypeid";
+
+    var requestCodedReasonLookupColumnName =
+        Environment.GetEnvironmentVariable("RequestCodedReasonLookupColumnName") ?? "voa_codedreasonid";
+
+    var codedReasonEntityName =
+        Environment.GetEnvironmentVariable("RequestCodedReasonEntityLogicalName") ?? "voa_codedreason";
+
+    var jobRequestTypeColumnName =
+        Environment.GetEnvironmentVariable("JobRequestTypeLookupColumnName") ?? "voa_requesttype";
+
+    var ssuEntityName =
+        Environment.GetEnvironmentVariable("SsuEntityName") ?? "voa_ssu";
+
+    var requestDataSourceRoleColumnName =
+        Environment.GetEnvironmentVariable("RequestDataSourceRoleColumnName") ?? "voa_datasourceroleid";
+
+    var jobChannelColumnName =
+        Environment.GetEnvironmentVariable("JobChannelColumnName") ?? "caseorigincode";
+
+    var requestChannelColumnName =
+        Environment.GetEnvironmentVariable("RequestChannelColumnName") ?? "voa_origincode";
+
+    var requestRelationshipRoleLookupColumnName =
+        Environment.GetEnvironmentVariable("RequestRelationshipRoleLookupColumnName") ?? "voa_partyrelationshiproleid";
+
+    var requestSubmittingInternalUserLookupColumnName =
+        Environment.GetEnvironmentVariable("RequestSubmittingInternalUserLookupColumnName") ?? "voa_submittinginternaluserid";
+
+    var request = _dataverseService.Retrieve(
+        requestEntityName,
+        requestId,
+        new ColumnSet(
+            ConfigurationValues.Owner,
+            requestRequestTypeColumnName,
+            requestCodedReasonLookupColumnName,
+            requestSsuLookupColumnName,
+            requestSubmittedByColumnName,
+            requestRatepayerColumnName,
+            requestTargetDateColumnName,
+            requestRemarksColumnName,
+            requestProposedBillingAuthorityColumnName,
+            requestDataSourceRoleColumnName,
+            requestChannelColumnName,
+            requestRelationshipRoleLookupColumnName,
+            requestSubmittingInternalUserLookupColumnName
+        ));
+
+    var requestTypeRef =
+        request.GetAttributeValue<EntityReference>(requestRequestTypeColumnName)
+        ?? new EntityReference(
+            ConfigurationValues.RequestTypeEntityName,
+            ConfigurationIds.RequestTypeCouncilTax);
+
+    var codedReasonRef =
+        request.GetAttributeValue<EntityReference>(requestCodedReasonLookupColumnName)
+        ?? throw new InvalidOperationException("Request is missing coded reason lookup.");
+
+    var ssuRef =
+        request.GetAttributeValue<EntityReference>(requestSsuLookupColumnName);
+
+    var ownerRef =
+        request.GetAttributeValue<EntityReference>(ConfigurationValues.Owner)
+        ?? new EntityReference("systemuser", userId);
+
+    var customerRef = ResolveCustomerReference(
+        request,
+        requestRatepayerColumnName,
+        requestSubmittedByColumnName);
+
+    var targetDate =
+        request.GetAttributeValue<DateTime?>(requestTargetDateColumnName);
+
+    var remarks =
+        request.GetAttributeValue<string>(requestRemarksColumnName);
+
+    var proposedBillingAuthorityRef =
+        request.GetAttributeValue<EntityReference>(requestProposedBillingAuthorityColumnName);
+
+    var codedReasonName =
+        ResolveCodedReasonName(codedReasonEntityName, codedReasonRef.Id);
+
+    var dataSourceRoleRef =
+        request.GetAttributeValue<EntityReference>(requestDataSourceRoleColumnName)
+        ?? new EntityReference(
+            ConfigurationValues.DataSourceEntityName,
+            Guid.Parse("10db3bf8-f5f7-ee11-a1fe-0022481b5aad"));
+
+    var channel =
+        request.GetAttributeValue<OptionSetValue>(requestChannelColumnName)
+        ?? new OptionSetValue(589160010);
+
+    var relationshipRoleRef =
+        request.GetAttributeValue<EntityReference>(requestRelationshipRoleLookupColumnName)
+        ?? new EntityReference(
+            ConfigurationValues.RelationshipRoleEntityName,
+            Guid.Parse("2db20153-5367-ed11-9561-002248428304"));
+
+    var submittingInternalUserRef =
+        request.GetAttributeValue<EntityReference>(requestSubmittingInternalUserLookupColumnName)
+        ?? new EntityReference("systemuser", userId);
+
+    if (ssuRef is not null)
     {
-        var requestEntityName = Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
-        var requestLookupColumnName = Environment.GetEnvironmentVariable("JobParentRequestColumnName") ?? ConfigurationValues.ParentRequest;
-        var jobTypeColumnName = Environment.GetEnvironmentVariable("JobTypeColumnName") ?? ConfigurationValues.JobType;
-        var requestTypeColumnName = Environment.GetEnvironmentVariable("JobRequestTypeLookupColumnName") ?? "voa_requesttypeid";
-        var targetDateColumnName = Environment.GetEnvironmentVariable("JobTargetDateColumnName") ?? "voa_targetdate";
-        var customerColumnName = Environment.GetEnvironmentVariable("JobCustomerColumnName") ?? "customerid";
-        var titleColumnName = Environment.GetEnvironmentVariable("JobTitleColumnName") ?? "title";
-        var descriptionColumnName = Environment.GetEnvironmentVariable("JobDescriptionColumnName") ?? "description";
-        var requestSubmittedByColumnName = Environment.GetEnvironmentVariable("RequestSubmittedByLookupColumnName") ?? "voa_customer2id";
-        var requestRatepayerColumnName = Environment.GetEnvironmentVariable("RequestRatepayerLookupColumnName") ?? "voa_customeraccountid";
-        var requestTargetDateColumnName = Environment.GetEnvironmentVariable("RequestTargetDateColumnName") ?? "voa_targetdate";
-        var requestRemarksColumnName = Environment.GetEnvironmentVariable("RequestRemarksColumnName") ?? "voa_remarks";
-        var requestProposedBillingAuthorityColumnName = Environment.GetEnvironmentVariable("RequestProposedBillingAuthorityLookupColumnName") ?? ConfigurationValues.ProposedBillingAuthority;
-        var requestSsuLookupColumnName = Environment.GetEnvironmentVariable("RequestSsuLookupColumnName") ?? "voa_statutoryspatialunitid";
-        var requestRequestTypeColumnName = Environment.GetEnvironmentVariable("RequestRequestTypeLookupColumnName") ?? "voa_requesttypeid";
-        var requestCodedReasonLookupColumnName = Environment.GetEnvironmentVariable("RequestCodedReasonLookupColumnName") ?? "voa_codereasonid";
-        var codedReasonEntityName = Environment.GetEnvironmentVariable("RequestCodedReasonEntityLogicalName") ?? "voa_codereason";
-
-        var request = _dataverseService.Retrieve(
-            requestEntityName,
-            requestId,
-            new ColumnSet(
-                ConfigurationValues.Owner,
-                requestRequestTypeColumnName,
-                requestCodedReasonLookupColumnName,
-                requestSsuLookupColumnName,
-                requestSubmittedByColumnName,
-                requestRatepayerColumnName,
-                requestTargetDateColumnName,
-                requestRemarksColumnName,
-                requestProposedBillingAuthorityColumnName));
-
-        var requestTypeRef = request.GetAttributeValue<EntityReference>(requestRequestTypeColumnName)
-            ?? new EntityReference(ConfigurationValues.RequestTypeEntityName, ConfigurationIds.RequestTypeCouncilTax);
-        var codedReasonRef = request.GetAttributeValue<EntityReference>(requestCodedReasonLookupColumnName)
-            ?? throw new InvalidOperationException("Request is missing coded reason lookup.");
-        var ssuRef = request.GetAttributeValue<EntityReference>(requestSsuLookupColumnName);
-        var ownerRef = request.GetAttributeValue<EntityReference>(ConfigurationValues.Owner)
-            ?? new EntityReference("systemuser", userId);
-        var customerRef = ResolveCustomerReference(request, requestRatepayerColumnName, requestSubmittedByColumnName);
-        var targetDate = request.GetAttributeValue<DateTime?>(requestTargetDateColumnName);
-        var remarks = request.GetAttributeValue<string>(requestRemarksColumnName);
-        var proposedBillingAuthorityRef = request.GetAttributeValue<EntityReference>(requestProposedBillingAuthorityColumnName);
-        var codedReasonName = ResolveCodedReasonName(codedReasonEntityName, codedReasonRef.Id);
-
-        if (ssuRef is not null)
-        {
-            UpsertHereditamentLink(ssuRef.Id);
-        }
-
-        var jobEntity = new Entity(ConfigurationValues.IncidentEntityName)
-        {
-            [titleColumnName] = BuildJobTitle(codedReasonName, item.SsuId),
-            [descriptionColumnName] = $"{item.SourceType}-initiated job for {item.SsuId} from {componentName}",
-            [ConfigurationValues.Owner] = ownerRef,
-            [requestLookupColumnName] = new EntityReference(requestEntityName, requestId),
-            [jobTypeColumnName] = new EntityReference(codedReasonEntityName, codedReasonRef.Id),
-            [requestTypeColumnName] = requestTypeRef,
-            [customerColumnName] = customerRef,
-            [ConfigurationValues.ReadyForQualityChecks] = false,
-        };
-
-        if (!string.IsNullOrWhiteSpace(remarks))
-        {
-            jobEntity[ConfigurationValues.Remarks] = remarks;
-        }
-
-        if (targetDate.HasValue)
-        {
-            jobEntity[targetDateColumnName] = targetDate.Value;
-        }
-
-        if (proposedBillingAuthorityRef is not null)
-        {
-            jobEntity[ConfigurationValues.ProposedBillingAuthority] = proposedBillingAuthorityRef;
-        }
-
-        var jobId = CreateEntityWithBypass(jobEntity);
-        _logger.LogInformation("Direct job created. RequestId={RequestId}, JobId={JobId}", requestId, jobId);
-        return jobId;
+        UpsertHereditamentLink(ssuRef.Id);
     }
+
+    var jobEntity = new Entity(ConfigurationValues.IncidentEntityName)
+    {
+        [titleColumnName] = BuildJobTitle(codedReasonName, item.SsuId),
+        [descriptionColumnName] = $"{item.SourceType}-initiated job for {item.SsuId} from {componentName}",
+        [ConfigurationValues.Owner] = ownerRef,
+        [requestLookupColumnName] = new EntityReference(requestEntityName, requestId),
+        [jobTypeColumnName] = new EntityReference(codedReasonEntityName, codedReasonRef.Id),
+        [jobRequestTypeColumnName] = requestTypeRef,
+        [customerColumnName] = customerRef,
+        [ConfigurationValues.ReadyForQualityChecks] = false,
+        [requestSsuLookupColumnName] = new EntityReference(ssuEntityName, ssuRef.Id),
+        [requestDataSourceRoleColumnName] = dataSourceRoleRef,
+        [jobChannelColumnName] = channel,
+        [requestRelationshipRoleLookupColumnName] = relationshipRoleRef,
+        [requestSubmittingInternalUserLookupColumnName] = submittingInternalUserRef
+    };
+
+    if (!string.IsNullOrWhiteSpace(remarks))
+    {
+        jobEntity[ConfigurationValues.Remarks] = remarks;
+    }
+
+    if (targetDate.HasValue)
+    {
+        jobEntity[targetDateColumnName] = targetDate.Value;
+    }
+
+    if (proposedBillingAuthorityRef is not null)
+    {
+        jobEntity[ConfigurationValues.ProposedBillingAuthority] = proposedBillingAuthorityRef;
+    }
+
+    var jobId = CreateEntityWithBypass(jobEntity);
+
+    _logger.LogInformation(
+        "Direct job created. RequestId={RequestId}, JobId={JobId}",
+        requestId,
+        jobId);
+
+    return jobId;
+}
 
     private EntityReference ResolveCustomerReference(Entity request, string ratepayerColumnName, string submittedByColumnName)
     {

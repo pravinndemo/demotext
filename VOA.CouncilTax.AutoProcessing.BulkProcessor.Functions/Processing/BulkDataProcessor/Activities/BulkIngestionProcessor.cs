@@ -12,6 +12,7 @@ using Microsoft.Xrm.Sdk.Query;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
+using VOA.CouncilTax.AutoProcessing.Consequential.Constants;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Activities;
 
@@ -33,7 +34,7 @@ public class BulkIngestionProcessor
     private const string ItemProcessingAttemptCountColumn = "voa_processingattemptcount";
     private const string ItemLockedForProcessingColumn = "voa_lockedforprocessing";
     private const string ItemCanReprocessColumn = "voa_canreprocess";
-    private const string ItemSsuIdColumn = "voa_ssuid";
+    private const string ItemSsuIdColumn = "voa_hereditament";
     private const string ItemRequestLookupColumn = "voa_requestlookup";
     private const string ItemJobLookupColumn = "voa_joblookup";
 
@@ -216,7 +217,7 @@ public class BulkIngestionProcessor
                 errorMessage: null,
                 canReprocess: true);
 
-            var ssuId = item.GetAttributeValue<string>(ItemSsuIdColumn)?.Trim() ?? string.Empty;
+            var ssuId = item.GetAttributeValue<EntityReference>(ItemSsuIdColumn)?.Id.ToString() ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(ssuId))
             {
@@ -255,6 +256,7 @@ public class BulkIngestionProcessor
                 });
                 continue;
             }
+            var hereditament = item.GetAttributeValue<EntityReference>(ItemSsuIdColumn);
 
             eligibleItems.Add((
                 item,
@@ -262,8 +264,9 @@ public class BulkIngestionProcessor
                 {
                     SsuId = ssuId,
                     SourceType = timerContext.SourceType,
-                    SourceValue = item.GetAttributeValue<string>("voa_sourcevalue") ?? ssuId,
+                    SourceValue = item.GetAttributeValue<string>("voa_sourcevalue") ?? ssuId
                 }));
+            
         }
 
         if (eligibleItems.Count == 0)

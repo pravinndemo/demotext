@@ -5,6 +5,15 @@ using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Query;
 using System.Diagnostics;
 using VOA.CouncilTax.AutoProcessing.Constants;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Text;
+using System.Diagnostics;
+using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
+using VOA.CouncilTax.AutoProcessing.Constants;
+
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
 
@@ -83,13 +92,20 @@ public sealed class RequestJobCreationService
             };
         }
 
-        var requestEntityName = Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
-        var requestCodedReasonLookupColumnName = Environment.GetEnvironmentVariable("RequestCodedReasonLookupColumnName") ?? "voa_codereasonid";
-        var requestCodedReasonEntityLogicalName = Environment.GetEnvironmentVariable("RequestCodedReasonEntityLogicalName") ?? "voa_codereason";
-        var requestRequestedByLookupColumnName = Environment.GetEnvironmentVariable("RequestRequestedByLookupColumnName") ?? "voa_requestedby";
-        var requestComponentNameColumnName = Environment.GetEnvironmentVariable("RequestComponentNameColumnName") ?? "voa_componentname";
-        var requestSourceValueColumnName = Environment.GetEnvironmentVariable("RequestSourceValueColumnName") ?? "voa_sourcevalue";
-        var requestStatusColumnName = Environment.GetEnvironmentVariable("RequestStatusColumnName") ?? "statuscode";
+        var requestEntityName =
+    Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
+var requestCodedReasonLookupColumnName =
+    Environment.GetEnvironmentVariable("RequestCodedReasonLookupColumnName") ?? "voa_codedreasonid";
+var requestCodedReasonEntityLogicalName =
+    Environment.GetEnvironmentVariable("RequestCodedReasonEntityLogicalName") ?? "voa_codedreason";
+var requestSubmittingInternalUserLookupColumnName =
+    Environment.GetEnvironmentVariable("RequestSubmittingInternalUserLookupColumnName") ?? "voa_submittinginternaluserid";
+var requestComponentNameColumnName =
+    Environment.GetEnvironmentVariable("RequestComponentNameColumnName") ?? "voa_remarks";
+var requestSourceValueColumnName =
+    Environment.GetEnvironmentVariable("RequestSourceValueColumnName") ?? "voa_sourcevalue";
+var requestStatusColumnName =
+    Environment.GetEnvironmentVariable("RequestStatusColumnName") ?? "statuscode";
         // If jobTypeId not provided, resolve by name from environment/parameter
         Guid resolvedJobTypeId = jobTypeId ?? Guid.Empty;
         if (resolvedJobTypeId == Guid.Empty)
@@ -129,7 +145,7 @@ public sealed class RequestJobCreationService
                 requestEntityName,
                 requestCodedReasonLookupColumnName,
                 requestCodedReasonEntityLogicalName,
-                requestRequestedByLookupColumnName,
+                requestSubmittingInternalUserLookupColumnName,
                 requestComponentNameColumnName,
                 requestSourceValueColumnName,
                 requestStatusColumnName,
@@ -160,83 +176,211 @@ public sealed class RequestJobCreationService
     }
 
     private RequestJobCreateResult CreateForItem(
-        RequestJobCreateItem item,
-        Guid userId,
-        string componentName,
-        string? sourceType,
-        bool createJob,
-        string requestEntityName,
-        string requestCodedReasonLookupColumnName,
-        string requestCodedReasonEntityLogicalName,
-        string requestRequestedByLookupColumnName,
-        string requestComponentNameColumnName,
-        string requestSourceValueColumnName,
-        string requestStatusColumnName,
-        Guid jobTypeId)
+    RequestJobCreateItem item,
+    Guid userId,
+    string componentName,
+    string? sourceType,
+    bool createJob,
+    string requestEntityName,
+    string requestCodedReasonLookupColumnName,
+    string requestCodedReasonEntityLogicalName,
+    string requestSubmittingInternalUserLookupColumnName,
+    string requestComponentNameColumnName,
+    string requestSourceValueColumnName,
+    string requestStatusColumnName,
+    Guid jobTypeId)
+{
+    var result = new RequestJobCreateResult
     {
-        var result = new RequestJobCreateResult
+        SsuId = item.SsuId,
+        SourceType = sourceType ?? item.SourceType ?? "SVT",
+    };
+
+    try
+    {
+        _logger.LogInformation(
+            "Creating request: SsuId={SsuId}, UserId={UserId}, ComponentName={ComponentName}, SourceType={SourceType}, TriggerPluginJobCreation={CreateJob}",
+            item.SsuId,
+            userId,
+            componentName,
+            result.SourceType,
+            createJob);
+
+        if (!Guid.TryParse(item.SsuId, out var ssuIdGuid))
         {
-            SsuId = item.SsuId,
-            SourceType = sourceType ?? item.SourceType ?? "SVT",
+            result.Success = false;
+            result.ErrorCode = "INVALID_SSU_FORMAT";
+            result.ErrorMessage = "SSU ID must be a valid GUID.";
+            return result;
+        }
+
+        bool activeRequestWithJobTypeAndHereditamentPresent =
+            RetrieveActiveRequestsAsync(ssuIdGuid, jobTypeId).Result;
+
+        if (activeRequestWithJobTypeAndHereditamentPresent)
+        {
+            result.Success = false;
+            result.ErrorCode = "ACTIVE_REQUEST_PRESENT";
+            result.ErrorMessage = "Active requests with same SSUID and Job Type exists.";
+            return result;
+        }
+
+        //var baReference = new RequestJobCreationService(_crmService, _logger);
+        var entityForBillingAuthority =
+            RetrieveBAReference(ssuIdGuid).GetAwaiter().GetResult();
+
+        EntityReference relatedBillingAuthorityLinkRef = null;
+        EntityReference proposedBillingAuthorityRef = null;
+        string baReferenceNumber = string.Empty;
+
+        if (entityForBillingAuthority != null)
+        {
+            relatedBillingAuthorityLinkRef =
+                entityForBillingAuthority.GetAttributeValue<EntityReference>("voa_relatedbillingauthoritylinkid") ?? null;
+
+            proposedBillingAuthorityRef =
+                entityForBillingAuthority.GetAttributeValue<EntityReference>("voa_proposedbillingauthorityid") ?? null;
+
+            baReferenceNumber =
+                entityForBillingAuthority.GetAttributeValue<string>("voa_bareferencenumber") ?? string.Empty;
+        }
+
+        var requestTypeColumnName =
+            Environment.GetEnvironmentVariable("RequestRequestTypeLookupColumnName") ?? "voa_requesttypeid";
+
+        var requestTargetDateColumnName =
+            Environment.GetEnvironmentVariable("RequestTargetDateColumnName") ?? "voa_targetdate";
+
+        var requestDateReceivedColumnName =
+            Environment.GetEnvironmentVariable("RequestDateReceivedColumnName") ?? "voa_datereceived";
+
+        var requestSubmittedByLookupColumnName =
+            Environment.GetEnvironmentVariable("RequestSubmittedByColumnName") ?? "voa_customer2id";
+
+        var requestRelationshipRoleLookupColumnName =
+            Environment.GetEnvironmentVariable("RequestRelationshipRoleColumnName") ?? "voa_partyrelationshiproleid";
+
+        var requestDataSourceRoleLookupColumnName =
+            Environment.GetEnvironmentVariable("RequestDataSourceRoleColumnName") ?? "voa_datasourceroleid";
+
+        var requestChannelColumnName =
+            Environment.GetEnvironmentVariable("RequestChannelColumnName") ?? "voa_origincode";
+
+        var requestRelatedBillingAuthorityLinkLookUpColumnName =
+            Environment.GetEnvironmentVariable("RequestRelatedBillingAuthorityLinkLookUpColumnName")
+            ?? "voa_relatedbillingauthoritylinkid";
+
+        var requestBAReferenceNumberColumnName =
+            Environment.GetEnvironmentVariable("RequestBAReferenceNumberColumnName")
+            ?? "voa_bareferencenumber";
+
+        var requestProposedBillingAuthorityIdLookUpColumnName =
+            Environment.GetEnvironmentVariable("RequestProposedBillingAuthorityIdLookUpColumnName")
+            ?? "voa_proposedbillingauthorityid";
+
+        var requestTargetDateOffsetDays = GetTargetDateOffsetDays();
+
+        var requestNameColumnName =
+            Environment.GetEnvironmentVariable("RequestNameColumnName") ?? "voa_name";
+
+        string name =
+            GenerateRequestName(jobTypeId, ssuIdGuid, proposedBillingAuthorityRef.Id)
+                .GetAwaiter()
+                .GetResult();
+
+        var requestEntity = new Entity(requestEntityName)
+        {
+            ["voa_statutoryspatialunitid"] =
+                new EntityReference("voa_ssu", ssuIdGuid),
+
+            [requestCodedReasonLookupColumnName] =
+                new EntityReference(requestCodedReasonEntityLogicalName, jobTypeId),
+
+            [requestSubmittingInternalUserLookupColumnName] =
+                new EntityReference("systemuser", userId),
+
+            [requestSubmittedByLookupColumnName] =
+                new EntityReference(
+                    "account",
+                    Guid.Parse("c5812477-5367-ed11-9561-002248428304")), // Valuation Office Agency
+
+            [requestRelationshipRoleLookupColumnName] =
+                new EntityReference(
+                    ConfigurationValues.RelationshipRoleEntityName,
+                    Guid.Parse("2db20153-5367-ed11-9561-002248428304")), // Valuation Office Agency
+
+            [requestComponentNameColumnName] = componentName,
+
+            [ConfigurationValues.Owner] =
+                new EntityReference("systemuser", userId),
+
+            [requestTypeColumnName] =
+                new EntityReference(
+                    ConfigurationValues.RequestTypeEntityName,
+                    ConfigurationIds.RequestTypeCouncilTax),
+
+            [requestDateReceivedColumnName] = DateTime.UtcNow,
+
+            [requestTargetDateColumnName] =
+                DateTime.UtcNow.AddDays(requestTargetDateOffsetDays),
+
+            [requestStatusColumnName] =
+                new OptionSetValue(ConfigurationIds.RequestInProgressStatusCode),
+
+            [requestDataSourceRoleLookupColumnName] =
+                new EntityReference(
+                    ConfigurationValues.DataSourceEntityName,
+                    Guid.Parse("10db3bf8-f5f7-ee11-a1fe-0022481b5aad")), // Listing Officer Report
+
+            [requestChannelColumnName] =
+                new OptionSetValue(589160010), // Manual input
+
+            [requestNameColumnName] = name,
+
+            [requestRelatedBillingAuthorityLinkLookUpColumnName] =
+                relatedBillingAuthorityLinkRef,
+
+            [requestBAReferenceNumberColumnName] =
+                baReferenceNumber,
+
+            [requestProposedBillingAuthorityIdLookUpColumnName] =
+                proposedBillingAuthorityRef
         };
 
-        try
+        //if (!string.IsNullOrWhiteSpace(item.SourceValue))
+        //{
+        //    requestEntity[requestSourceValueColumnName] = item.SourceValue;
+        //}
+
+        result.RequestId = CreateEntityWithBypass(requestEntity);
+
+        if (createJob)
         {
-            _logger.LogInformation(
-                "Creating request: SsuId={SsuId}, UserId={UserId}, ComponentName={ComponentName}, SourceType={SourceType}, TriggerPluginJobCreation={CreateJob}",
-                item.SsuId, userId, componentName, result.SourceType, createJob);
+            result.JobId =
+                _directJobCreationService.CreateJobForRequest(
+                    result.RequestId,
+                    item,
+                    userId,
+                    componentName);
 
-            if (!Guid.TryParse(item.SsuId, out var ssuIdGuid))
-            {
-                result.Success = false;
-                result.ErrorCode = "INVALID_SSU_FORMAT";
-                result.ErrorMessage = "SSU ID must be a valid GUID.";
-                return result;
-            }
-
-            var requestTypeColumnName = Environment.GetEnvironmentVariable("RequestRequestTypeLookupColumnName") ?? "voa_requesttypeid";
-            var requestTargetDateColumnName = Environment.GetEnvironmentVariable("RequestTargetDateColumnName") ?? "voa_targetdate";
-            var requestDateReceivedColumnName = Environment.GetEnvironmentVariable("RequestDateReceivedColumnName") ?? "voa_datereceived";
-            var requestTargetDateOffsetDays = GetTargetDateOffsetDays();
-
-            var requestEntity = new Entity(requestEntityName)
-            {
-                ["voa_statutoryspatialunitid"] = new EntityReference("voa_ssu", ssuIdGuid),
-                [requestCodedReasonLookupColumnName] = new EntityReference(requestCodedReasonEntityLogicalName, jobTypeId),
-                [requestRequestedByLookupColumnName] = new EntityReference("systemuser", userId),
-                [requestComponentNameColumnName] = componentName,
-                [ConfigurationValues.Owner] = new EntityReference("systemuser", userId),
-                [requestTypeColumnName] = new EntityReference(ConfigurationValues.RequestTypeEntityName, ConfigurationIds.RequestTypeCouncilTax),
-                [requestDateReceivedColumnName] = DateTime.UtcNow,
-                [requestTargetDateColumnName] = DateTime.UtcNow.AddDays(requestTargetDateOffsetDays),
-                [requestStatusColumnName] = new OptionSetValue(ConfigurationIds.RequestInProgressStatusCode),
-            };
-
-            if (!string.IsNullOrWhiteSpace(item.SourceValue))
-            {
-                requestEntity[requestSourceValueColumnName] = item.SourceValue;
-            }
-
-            result.RequestId = CreateEntityWithBypass(requestEntity);
-
-            if (createJob)
-            {
-                result.JobId = _directJobCreationService.CreateJobForRequest(result.RequestId, item, userId, componentName);
-                _directJobCreationService.UpdateRequestAfterDirectJobCreation(result.RequestId, result.JobId);
-            }
-
-            result.Success = true;
-            return result;
+            _directJobCreationService.UpdateRequestAfterDirectJobCreation(
+                result.RequestId,
+                result.JobId);
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error creating records for SsuId={SsuId}", item.SsuId);
-            result.Success = false;
-            result.ErrorCode = "CREATION_FAILED";
-            result.ErrorMessage = ex.Message;
-            return result;
-        }
+
+        result.Success = true;
+        return result;
     }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Error creating records for SsuId={SsuId}", item.SsuId);
+
+        result.Success = false;
+        result.ErrorCode = "CREATION_FAILED";
+        result.ErrorMessage = ex.Message;
+        return result;
+    }
+}
 
     private async Task<Guid> GetCodedReasonIdAsync(string entityName, string valueColumnName, string targetValue)
     {
@@ -288,6 +432,191 @@ public sealed class RequestJobCreationService
     {
         return Environment.GetEnvironmentVariable("BypassBusinessLogicExecutionModes") ?? "CustomSync,CustomAsync";
     }
+
+    private async Task<string> GenerateRequestName(Guid jobTypeId, Guid ssuId, Guid proposedBillingAuthorityId)
+    {
+        _logger.LogInformation("Generating voa_name value for record");
+
+        StringBuilder requestName = new StringBuilder("CT: Request");
+
+        Entity codedReason = await _dataverseService.RetrieveAsync(
+            "voa_codedreason",
+            jobTypeId,
+            new ColumnSet("voa_name"));
+
+        string codedReasonName = codedReason.GetAttributeValue<string>("voa_name");
+        requestName.Append((string.IsNullOrEmpty(codedReasonName) ? ", UNKNOWN JOB TYPE" : $", {codedReasonName}"));
+
+        Entity hereditament = null, proposedBillingAuthority = null;
+
+        //EntityReference hereditamentER = requestLineItem.GetAttributeValue<EntityReference>("voa_statutoryspatialunitid");
+        if (ssuId != Guid.Empty)
+        {
+            hereditament = await _dataverseService.RetrieveAsync(
+                "voa_ssu",
+                ssuId,
+                new ColumnSet("voa_name"));
+        }
+
+        //EntityReference proposedBillingAuthorityER = requestLineItem.GetAttributeValue<EntityReference>("voa_proposedbillingauthorityid");
+        if (proposedBillingAuthorityId != Guid.Empty)
+        {
+            proposedBillingAuthority = await _dataverseService.RetrieveAsync(
+                "account",
+                proposedBillingAuthorityId,
+                new ColumnSet("name"));
+        }
+
+        if (hereditament != null)
+        {
+            string hereditamentName = hereditament.GetAttributeValue<string>("voa_name");
+            requestName.Append((string.IsNullOrEmpty(hereditamentName) ? ", Unknown or New Hereditament" : $", {hereditamentName}"));
+        }
+        else
+        {
+            requestName.Append(", Unknown or New Hereditament");
+        }
+
+        if (proposedBillingAuthority != null)
+        {
+            string proposedBillingAuthorityName = proposedBillingAuthority.GetAttributeValue<string>("name");
+            requestName.Append((string.IsNullOrEmpty(proposedBillingAuthorityName) ? ", UNKNOWN BILLING AUTHORITY" : $", {proposedBillingAuthorityName}"));
+        }
+
+        _logger.LogInformation($"Generated Request name: '{requestName.ToString()}'");
+        return requestName.ToString();
+    }
+
+    public async Task<Entity> RetrieveBAReference(Guid ssuId)
+    {
+        var proposedDate = DateTime.Now;
+        Entity relatedBillingAuthorityLink = null;
+        EntityReference proposedBillingAuthority = null;
+        Entity requestLineItem = new Entity();
+
+        if (proposedDate != DateTime.MinValue && ssuId != Guid.Empty)
+        {
+            relatedBillingAuthorityLink = await GetBillingAuthorityLink(_dataverseService, ssuId, proposedDate);
+
+            if (relatedBillingAuthorityLink != null)
+            {
+                requestLineItem["voa_relatedbillingauthoritylinkid"] =
+                    relatedBillingAuthorityLink.ToEntityReference();
+
+                requestLineItem["voa_bareferencenumber"] =
+                    relatedBillingAuthorityLink.GetAttributeValue<string>("voa_billingauthorityreference");
+            }
+
+            if (proposedBillingAuthority == null)
+            {
+                _logger.LogInformation(
+                    $"On-Create: 'Proposed Billing Authority' is null so attempting to set it from the 'Related Billing Authority Link'");
+
+                // If we have an active BA in the Related BA Link, then set it to this
+                if (relatedBillingAuthorityLink != null &&
+                    relatedBillingAuthorityLink.TryGetAttributeValue(
+                        "voa_billingauthorityid",
+                        out EntityReference linkedBaER))
+                {
+                    _logger.LogInformation(
+                        "On-Create: Setting 'Proposed Billing Authority' to 'Related Billing Authority Link'");
+
+                    proposedBillingAuthority = linkedBaER;
+                    requestLineItem["voa_proposedbillingauthorityid"] = linkedBaER;
+                }
+            }
+
+            // If Proposed BA is still null, try and get it from the Hereditament
+            if (proposedBillingAuthority == null && ssuId != Guid.Empty)
+            {
+                _logger.LogInformation(
+                    "On-Create: 'Proposed Billing Authority' is still null, attempting to retrieve 'Latest BA Link' from Hereditament");
+
+                // Retrieve voa_latestbalinkid from Hereditament
+                var retrievedHereditament = _dataverseService.Retrieve(
+                    "voa_ssu",
+                    ssuId,
+                    new ColumnSet("voa_latestbalinkid"));
+
+                if (retrievedHereditament.TryGetAttributeValue(
+                    "voa_latestbalinkid",
+                    out EntityReference latestBaLinkER))
+                {
+                    // Get the BA from the Latest BA Link
+                    var retrievedLatestBaLink = _dataverseService.Retrieve(
+                        latestBaLinkER.LogicalName,
+                        latestBaLinkER.Id,
+                        new ColumnSet("voa_billingauthorityid"));
+
+                    if (retrievedLatestBaLink.TryGetAttributeValue(
+                        "voa_billingauthorityid",
+                        out EntityReference hereditamentLatestBaER))
+                    {
+                        _logger.LogInformation(
+                            "On-Create: Setting 'Proposed Billing Authority' to 'Latest BA Link' from Hereditament");
+
+                        proposedBillingAuthority = hereditamentLatestBaER;
+                        requestLineItem["voa_proposedbillingauthorityid"] = hereditamentLatestBaER;
+                    }
+                }
+            }
+
+            return requestLineItem;
+        }
+
+        return null;
+    }
+
+    private async Task<Entity> GetBillingAuthorityLink(
+        IOrganizationServiceAsync2 _dataverseService,
+        Guid ssuId,
+        DateTime proposedDate)
+    {
+        _logger.LogInformation($"Attempting to locate a Billing Authority Link for {ssuId}");
+
+        if (ssuId == Guid.Empty || proposedDate == DateTime.MinValue)
+        {
+            return null;
+        }
+
+        var getBillingAuthorityLinkQE = new QueryExpression("voa_billingauthoritylink");
+        getBillingAuthorityLinkQE.TopCount = 1;
+
+        getBillingAuthorityLinkQE.ColumnSet.AddColumns(
+            "voa_billingauthorityid",
+            "voa_billingauthoritylinkid",
+            "voa_billingauthorityreference",
+            "voa_communitycodeid");
+
+        getBillingAuthorityLinkQE.Criteria.AddCondition(
+            "voa_statusid",
+            ConditionOperator.Equal,
+            new Guid("74211c0c-81b7-ed11-b596-00224801fbb2"));
+
+        getBillingAuthorityLinkQE.Criteria.AddCondition(
+            "voa_statutoryspatialunitid",
+            ConditionOperator.Equal,
+            ssuId);
+
+        // BST-140261 change
+        // getBillingAuthorityLinkQE.Criteria.AddCondition(
+        //     "voa_effectivefrom",
+        //     ConditionOperator.LessEqual,
+        //     proposedDate.Date);
+
+        getBillingAuthorityLinkQE.AddOrder("voa_createddate", OrderType.Descending);
+
+        // Passing the plugin class name into the 'tag' request parameter means that the Virtual
+        // Entity Data Provider tracing can determine which plugin triggered a Virtual Entity retrieval.
+        RetrieveMultipleRequest req = new RetrieveMultipleRequest();
+        req.Query = getBillingAuthorityLinkQE;
+        req.Parameters.Add("tag", "GetBillingAuthorityLink");
+
+        EntityCollection getBillingAuthorityLinkEC =
+            ((RetrieveMultipleResponse)_dataverseService.Execute(req)).EntityCollection;
+
+        return getBillingAuthorityLinkEC.Entities.FirstOrDefault();
+    }
 }
 
 public sealed class RequestJobCreateItem
@@ -297,6 +626,7 @@ public sealed class RequestJobCreateItem
     public string SourceType { get; set; } = string.Empty;
 
     public string SourceValue { get; set; } = string.Empty;
+    public string BaReference { get; set; } = string.Empty;
 }
 
 public sealed class RequestJobCreateResult

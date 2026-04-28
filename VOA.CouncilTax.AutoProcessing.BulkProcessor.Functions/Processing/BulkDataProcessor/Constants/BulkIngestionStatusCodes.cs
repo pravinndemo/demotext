@@ -46,5 +46,9 @@ public static class StatusCodes
     public const int StageRequestCreation = 358800002;
     public const int StageJobCreation = 358800003;
     public const int StageCompleted = 358800004;
+
+    //Bulk Ingestion Assignment Mode
+    public const int Team = 358800000;
+    public const int Manager = 358800001;
 }
 

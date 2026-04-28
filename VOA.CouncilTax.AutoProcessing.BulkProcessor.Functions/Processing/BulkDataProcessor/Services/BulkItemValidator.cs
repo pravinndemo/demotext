@@ -175,10 +175,10 @@ public sealed class BulkItemValidator
 
                 _logger.LogInformation(
                     "Validation updates: {SuccessCount} succeeded, {FailureCount} failed",
-                    writeResult.SucceededOperationCount,
-                    writeResult.FailedOperationCount);
+                    writeResult.Result.SucceededOperationCount,
+                    writeResult.Result.FailedOperationCount);
 
-                result.UpdatedCount = writeResult.SucceededOperationCount;
+                result.UpdatedCount = writeResult.Result.SucceededOperationCount;
             }
 
             result.TotalCount = allItems.Entities.Count;

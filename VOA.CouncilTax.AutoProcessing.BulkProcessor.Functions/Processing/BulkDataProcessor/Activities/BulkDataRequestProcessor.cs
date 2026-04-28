@@ -3,12 +3,14 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.PowerPlatform.Dataverse.Client;
 using Microsoft.Xrm.Sdk;
+using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Query;
 using System.Diagnostics;
 using System.Text.Json;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Routing;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
+using VOA.CouncilTax.AutoProcessing.Processing.Consequential.Activites;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Activities;
 
@@ -397,264 +399,386 @@ public sealed class BulkDataRequestProcessor
         return new AcceptedResult(string.Empty, decision);
     }
     private async Task HandleSaveItemsAsync(
-        BulkDataRouteDecisionRequest request,
-        Guid bulkProcessorId,
-        string bulkProcessorEntityName,
-        string totalRowsColumnName,
-        string validItemCountColumnName)
+    BulkDataRouteDecisionRequest request,
+    Guid bulkProcessorId,
+    string bulkProcessorEntityName,
+    string totalRowsColumnName,
+    string validItemCountColumnName)
+{
+    EntityCollection bulkIngestionCollection = await _dataverseService.RetrieveMultipleAsync(new FetchExpression(
+        FetcherXMLHelper.getBulkIngestionFromID(bulkProcessorId.ToString())));
+
+    Entity bulkIngestion = bulkIngestionCollection.Entities.FirstOrDefault();
+
+    var saveItemsSw = Stopwatch.StartNew();
+
+    var bulkIngestionItemEntityName =
+        Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
+
+    var bulkIngestionItemParentLookupColumnName =
+        Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
+
+    var ssuIdColumnName =
+        Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_hereditament";
+
+    var sourceValueColumnName =
+        Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_source";
+
+    var validationStatusColumnName =
+        Environment.GetEnvironmentVariable("BulkInestionItemValidationStatusColumnName") ?? "voa_validationstatus";
+
+    var assignedManagerColumn =
+        Environment.GetEnvironmentVariable("BulkIngestionItemAssignedManager") ?? "voa_assignedmanager";
+
+    var assignedTeamColumn =
+        Environment.GetEnvironmentVariable("BulkIngestionItemAssignedTeam") ?? "voa_assignedteam";
+
+    var pendingStatusValue = new OptionSetValue(Constants.StatusCodes.Pending);
+
+    var assignmentMode = GetOptionSetValueOrNull(bulkIngestion, "voa_assignmentmode");
+    EntityReference assignmentValue = new EntityReference();
+
+    if (assignmentMode != null)
     {
-        var saveItemsSw = Stopwatch.StartNew();
-        var bulkIngestionItemEntityName = Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
-        var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
-        var ssuIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_ssuid";
-        var sourceValueColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_sourcevalue";
-        var validationStatusColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName") ?? "voa_validationstatus";
-        var pendingStatusValue = Environment.GetEnvironmentVariable("BulkIngestionItemPendingStatus") ?? "Pending";
-
-        _logger.LogInformation(
-            "Starting SaveItems for batch {BulkProcessorId}, route mode: {RouteMode}, SSU count: {SsuCount}, CorrelationId: {CorrelationId}",
-            bulkProcessorId, 
-            request.SsuIds?.Count > 0 ? "BULK_SELECTION" : "BULK_FILE",
-            request.SsuIds?.Count ?? 0,
-            request.CorrelationId);
-
-        var bulkItemWriter = new DataverseBulkItemWriter(_dataverseService);
-        var upsertRequests = new List<OrganizationRequest>();
-        var csvRowsParsed = 0;
-
-        // For BULK_SELECTION: create/update items for provided SSU IDs
-        if (request.SsuIds?.Count > 0)
+        if (assignmentMode == Constants.StatusCodes.Team)
         {
-            // Retrieve existing items for this batch
-            var existingLookupSw = Stopwatch.StartNew();
-            var query = new QueryExpression(bulkIngestionItemEntityName)
-            {
-                ColumnSet = new ColumnSet(true),
-                Criteria = new FilterExpression()
-                {
-                    Conditions =
-                    {
-                        new ConditionExpression(bulkIngestionItemParentLookupColumnName, ConditionOperator.Equal, bulkProcessorId),
-                        new ConditionExpression(ssuIdColumnName, ConditionOperator.In, request.SsuIds.Cast<object>().ToArray()),
-                    }
-                }
-            };
-
-            var existingItems = await _dataverseService.RetrieveMultipleAsync(query);
-            existingLookupSw.Stop();
-            var existingBySSUId = existingItems.Entities.ToDictionary(
-                e => e.GetAttributeValue<string>(ssuIdColumnName) ?? string.Empty,
-                e => e);
-
-            _logger.LogInformation(
-                "Found {ExistingItemCount} existing items for batch {BulkProcessorId}, need to process {RequestedCount} SSU IDs. CorrelationId: {CorrelationId}",
-                existingItems.Entities.Count,
-                bulkProcessorId,
-                request.SsuIds.Count,
-                request.CorrelationId);
-            _logger.LogInformation(
-                "Performance.SaveItemsExistingLookup Batch={BulkProcessorId} ExistingItemCount={ExistingItemCount} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
-                bulkProcessorId,
-                existingItems.Entities.Count,
-                existingLookupSw.ElapsedMilliseconds,
-                request.CorrelationId);
-
-            // Build upsert requests: update existing, create new
-            foreach (var ssuId in request.SsuIds)
-            {
-                Entity itemEntity;
-
-                if (existingBySSUId.TryGetValue(ssuId, out var existingItem))
-                {
-                    // Update existing
-                    itemEntity = new Entity(bulkIngestionItemEntityName, existingItem.Id)
-                    {
-                        [ssuIdColumnName] = ssuId,
-                        [validationStatusColumnName] = pendingStatusValue,
-                    };
-                }
-                else
-                {
-                    // Create new
-                    itemEntity = new Entity(bulkIngestionItemEntityName)
-                    {
-                        [bulkIngestionItemParentLookupColumnName] = new EntityReference(bulkProcessorEntityName, bulkProcessorId),
-                        [ssuIdColumnName] = ssuId,
-                        [validationStatusColumnName] = pendingStatusValue,
-                    };
-                }
-
-                upsertRequests.Add(DataverseBulkItemWriter.BuildUpsertRequest(itemEntity));
-            }
+            assignmentValue = new EntityReference(
+                "team",
+                (Guid)(bulkIngestion.GetAttributeValue<EntityReference>("voa_assignedteam")?.Id));
         }
-        // For BULK_FILE: parse CSV from Dataverse file column
         else
         {
-            var fileColumnName = request.FileColumnName ?? "voa_sourcefile";
-            var csvParser = new CsvFileParser(_dataverseService, _logger);
-
-            try
-            {
-                var parseCsvSw = Stopwatch.StartNew();
-                var csvRows = await csvParser.ParseCsvFromDataverseFileAsync(
-                    bulkProcessorId,
-                    bulkProcessorEntityName,
-                    fileColumnName);
-                parseCsvSw.Stop();
-                csvRowsParsed = csvRows.Count;
-
-                _logger.LogInformation(
-                    "Parsed {RowCount} rows from CSV file for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
-                    csvRows.Count, bulkProcessorId, request.CorrelationId);
-                _logger.LogInformation(
-                    "Performance.SaveItemsCsvParse Batch={BulkProcessorId} ParsedRows={ParsedRows} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
-                    bulkProcessorId,
-                    csvRows.Count,
-                    parseCsvSw.ElapsedMilliseconds,
-                    request.CorrelationId);
-
-                // Build upsert requests from CSV rows
-                foreach (var csvRow in csvRows)
-                {
-                    var itemEntity = new Entity(bulkIngestionItemEntityName)
-                    {
-                        [bulkIngestionItemParentLookupColumnName] = new EntityReference(bulkProcessorEntityName, bulkProcessorId),
-                        [ssuIdColumnName] = csvRow.SsuId,
-                        [sourceValueColumnName] = csvRow.SsuId,
-                        ["voa_SourceRowNumber"] = csvRow.SourceRowNumber,
-                        [validationStatusColumnName] = pendingStatusValue,
-                    };
-
-                    upsertRequests.Add(DataverseBulkItemWriter.BuildUpsertRequest(itemEntity));
-                }
-
-                _logger.LogInformation(
-                    "Built {RequestCount} upsert requests from CSV for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
-                    upsertRequests.Count, bulkProcessorId, request.CorrelationId);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Failed to parse CSV from file column {FileColumnName} for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
-                    fileColumnName, bulkProcessorId, request.CorrelationId);
-                throw;
-            }
+            assignmentValue = new EntityReference(
+                "systemuser",
+                (Guid)(bulkIngestion.GetAttributeValue<EntityReference>("voa_assignedmanager")?.Id));
         }
+    }
 
-        // Execute batch writes if any
-        if (upsertRequests.Count > 0)
+    _logger.LogInformation(
+        "Starting SaveItems for batch {BulkProcessorId}, route mode: {RouteMode}, SSU count: {SsuCount}, CorrelationId: {CorrelationId}",
+        bulkProcessorId,
+        request.SsuIds?.Count > 0 ? "BULK_SELECTION" : "BULK_FILE",
+        request.SsuIds?.Count ?? 0,
+        request.CorrelationId);
+
+    var bulkItemWriter = new DataverseBulkItemWriter(_dataverseService);
+    var bulkDataIngestionItemRequests = new List<OrganizationRequest>();
+
+    var upsertRequest = new ExecuteMultipleRequest()
+    {
+        Settings = new ExecuteMultipleSettings()
         {
-            var writeSw = Stopwatch.StartNew();
-            var writeResult = bulkItemWriter.ExecuteItemRequests(upsertRequests);
-            writeSw.Stop();
+            ContinueOnError = true,
+            ReturnResponses = true
+        },
+        Requests = new OrganizationRequestCollection()
+    };
 
-            _logger.LogInformation(
-                "Batch upsert completed for batch {BulkProcessorId}: {SuccessCount} succeeded, {FailureCount} failed. CorrelationId: {CorrelationId}",
-                bulkProcessorId,
-                writeResult.SucceededOperationCount,
-                writeResult.FailedOperationCount,
-                request.CorrelationId);
-            _logger.LogInformation(
-                "Performance.SaveItemsWrite Batch={BulkProcessorId} Requested={Requested} Succeeded={Succeeded} Failed={Failed} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
-                bulkProcessorId,
-                writeResult.RequestedOperationCount,
-                writeResult.SucceededOperationCount,
-                writeResult.FailedOperationCount,
-                writeSw.ElapsedMilliseconds,
-                request.CorrelationId);
+    var csvRowsParsed = 0;
 
-            if (writeResult.Errors.Count > 0)
-            {
-                _logger.LogWarning(
-                    "Errors during batch write for batch {BulkProcessorId}: {ErrorCount} errors. First error: {FirstError}. CorrelationId: {CorrelationId}",
-                    bulkProcessorId,
-                    writeResult.Errors.Count,
-                    writeResult.Errors.FirstOrDefault() ?? "N/A",
-                    request.CorrelationId);
-            }
-        }
+    // For BULK_SELECTION: create/update items for provided SSU IDs
+    if (request.SsuIds?.Count > 0)
+    {
+        // Retrieve existing items for this batch
+        var existingLookupSw = Stopwatch.StartNew();
 
-        // Validate items after writes (staging validation)
-        var validateSw = Stopwatch.StartNew();
-        var validator = new BulkItemValidator(_dataverseService, _logger);
-        var validationResult = await validator.ValidateBatchItemsAsync(
-            bulkProcessorId,
-            bulkIngestionItemEntityName,
-            bulkIngestionItemParentLookupColumnName);
-        validateSw.Stop();
-
-        _logger.LogInformation(
-            "Validation result for batch {BulkProcessorId}: Valid={ValidCount}, Invalid={InvalidCount}, Duplicate={DuplicateCount}. CorrelationId: {CorrelationId}",
-            bulkProcessorId,
-            validationResult.ValidCount,
-            validationResult.InvalidCount,
-            validationResult.DuplicateCount,
-            request.CorrelationId);
-        _logger.LogInformation(
-            "Performance.SaveItemsValidation Batch={BulkProcessorId} Total={Total} Valid={Valid} Invalid={Invalid} Duplicate={Duplicate} Updated={Updated} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
-            bulkProcessorId,
-            validationResult.TotalCount,
-            validationResult.ValidCount,
-            validationResult.InvalidCount,
-            validationResult.DuplicateCount,
-            validationResult.UpdatedCount,
-            validateSw.ElapsedMilliseconds,
-            request.CorrelationId);
-
-        var recalcSw = Stopwatch.StartNew();
-        var allItemsQuery = new QueryExpression(bulkIngestionItemEntityName)
+        var query = new QueryExpression(bulkIngestionItemEntityName)
         {
-            ColumnSet = new ColumnSet(validationStatusColumnName, "voa_isduplicate"),
+            ColumnSet = new ColumnSet(true),
             Criteria = new FilterExpression()
             {
                 Conditions =
                 {
-                    new ConditionExpression(bulkIngestionItemParentLookupColumnName, ConditionOperator.Equal, bulkProcessorId),
+                    new ConditionExpression(
+                        bulkIngestionItemParentLookupColumnName,
+                        ConditionOperator.Equal,
+                        bulkProcessorId),
+
+                    new ConditionExpression(
+                        ssuIdColumnName,
+                        ConditionOperator.In,
+                        request.SsuIds.Select(x => x.StatutorySpatialUnitId).ToArray())
                 }
             }
         };
 
-        var allItems = await _dataverseService.RetrieveMultipleAsync(allItemsQuery);
-        var recalculatedCounts = CalculateItemCounts(allItems);
+        var existingItems = await _dataverseService.RetrieveMultipleAsync(query);
+
+        existingLookupSw.Stop();
+
+        var existingBySSUId = existingItems.Entities.ToDictionary(
+            e => e.GetAttributeValue<string>(ssuIdColumnName) ?? string.Empty,
+            e => e);
+
+        _logger.LogInformation(
+            "Found {ExistingItemCount} existing items for batch {BulkProcessorId}, need to process {RequestedCount} SSU IDs. CorrelationId: {CorrelationId}",
+            existingItems.Entities.Count,
+            bulkProcessorId,
+            request.SsuIds.Count,
+            request.CorrelationId);
+
+        _logger.LogInformation(
+            "Performance.SaveItemsExistingLookup Batch={BulkProcessorId} ExistingItemCount={ExistingItemCount} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
+            bulkProcessorId,
+            existingItems.Entities.Count,
+            existingLookupSw.ElapsedMilliseconds,
+            request.CorrelationId);
+
+        // Build upsert requests: update existing, create new
+        foreach (var ssuId in request.SsuIds)
+        {
+            Entity itemEntity;
+            ParameterCollection parameters = new ParameterCollection
+            {
+                { "HereditamentId", ssuId.StatutorySpatialUnitId }
+            };
+
+            upsertRequest.Requests.Add(UpsertRequest(ssuId.StatutorySpatialUnitId));
+
+            if (existingBySSUId.TryGetValue(ssuId.StatutorySpatialUnitId.ToString(), out var existingItem))
+            {
+                // Update existing
+                itemEntity = new Entity(bulkIngestionItemEntityName, existingItem.Id)
+                {
+                    [ssuIdColumnName] =
+                        new EntityReference("voa_ssu", ssuId.StatutorySpatialUnitId),
+
+                    [validationStatusColumnName] = pendingStatusValue
+                };
+            }
+            else
+            {
+                // Create new
+                itemEntity = new Entity(bulkIngestionItemEntityName)
+                {
+                    [bulkIngestionItemParentLookupColumnName] =
+                        new EntityReference(bulkProcessorEntityName, bulkProcessorId),
+
+                    [ssuIdColumnName] =
+                        new EntityReference("voa_ssu", ssuId.StatutorySpatialUnitId),
+
+                    [validationStatusColumnName] = pendingStatusValue
+                };
+            }
+
+            bulkDataIngestionItemRequests.Add(
+                DataverseBulkItemWriter.BuildUpsertRequest(itemEntity));
+        }
+    }
+
+    // For BULK_FILE: parse CSV from Dataverse file column
+    else
+    {
+        var fileColumnName = request.FileColumnName ?? "voa_sourcefile";
+        var csvParser = new CsvFileParser(_dataverseService, _logger);
+
+        try
+        {
+            var parseCsvSw = Stopwatch.StartNew();
+
+            var csvRows = await csvParser.RetrieveSsuIdFromFile(
+                bulkProcessorId,
+                bulkProcessorEntityName,
+                fileColumnName);
+
+            parseCsvSw.Stop();
+            csvRowsParsed = csvRows.Count;
+
+            _logger.LogInformation(
+                "Parsed {RowCount} rows from CSV file for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                csvRows.Count,
+                bulkProcessorId,
+                request.CorrelationId);
+
+            _logger.LogInformation(
+                "Performance.SaveItemsCsvParse Batch={BulkProcessorId} ParsedRows={ParsedRows} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
+                bulkProcessorId,
+                csvRows.Count,
+                parseCsvSw.ElapsedMilliseconds,
+                request.CorrelationId);
+
+            // Build upsert requests from CSV rows
+            foreach (var csvRow in csvRows)
+            {
+                upsertRequest.Requests.Add(UpsertRequest(new Guid(csvRow.SsuId)));
+
+                var itemEntity = new Entity(bulkIngestionItemEntityName)
+                {
+                    [bulkIngestionItemParentLookupColumnName] =
+                        new EntityReference(bulkProcessorEntityName, bulkProcessorId),
+
+                    [ssuIdColumnName] =
+                        new EntityReference("voa_ssu", new Guid(csvRow.SsuId)),
+
+                    [sourceValueColumnName] =
+                        new OptionSetValue(358800000),
+
+                    //["voa_sourcerownumber"] = csvRow.SourceRowNumber,
+
+                    [assignedManagerColumn] =
+                        assignmentMode == Constants.StatusCodes.Manager ? assignmentValue : null,
+
+                    [assignedTeamColumn] =
+                        assignmentMode == Constants.StatusCodes.Team ? assignmentValue : null,
+
+                    [validationStatusColumnName] = pendingStatusValue
+                };
+
+                bulkDataIngestionItemRequests.Add(
+                    DataverseBulkItemWriter.BuildUpsertRequest(itemEntity));
+            }
+
+            _logger.LogInformation(
+                "Built {RequestCount} upsert requests from CSV for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                bulkDataIngestionItemRequests.Count,
+                bulkProcessorId,
+                request.CorrelationId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to parse CSV from file column {FileColumnName} for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                fileColumnName,
+                bulkProcessorId,
+                request.CorrelationId);
+
+            throw;
+        }
+    }
+
+    // Execute batch writes if any
+    if (bulkDataIngestionItemRequests.Count > 0)
+    {
+        var writeSw = Stopwatch.StartNew();
+
+        ExecuteMultipleResponse bulkRequestResponse =
+            (ExecuteMultipleResponse)await _dataverseService.ExecuteAsync(upsertRequest);
+
+        var writeResult =
+            bulkItemWriter.ExecuteItemRequests(bulkDataIngestionItemRequests);
+
+        writeSw.Stop();
+
+        _logger.LogInformation(
+            "Batch upsert completed for batch {BulkProcessorId}: {SuccessCount} succeeded, {FailureCount} failed. CorrelationId: {CorrelationId}",
+            bulkProcessorId,
+            writeResult.Result.SucceededOperationCount,
+            writeResult.Result.FailedOperationCount,
+            request.CorrelationId);
+
+        _logger.LogInformation(
+            "Performance.SaveItemsWrite Batch={BulkProcessorId} Requested={Requested} Succeeded={Succeeded} Failed={Failed} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
+            bulkProcessorId,
+            writeResult.Result.RequestedOperationCount,
+            writeResult.Result.SucceededOperationCount,
+            writeResult.Result.FailedOperationCount,
+            writeSw.ElapsedMilliseconds,
+            request.CorrelationId);
+
+        if (writeResult.Result.Errors.Count > 0)
+        {
+            _logger.LogWarning(
+                "Errors during batch write for batch {BulkProcessorId}: {ErrorCount} errors. First error: {FirstError}. CorrelationId: {CorrelationId}",
+                bulkProcessorId,
+                writeResult.Result.Errors.Count,
+                writeResult.Result.Errors.FirstOrDefault() ?? "N/A",
+                request.CorrelationId);
+        }
+    }
+
+    // Validate items after writes (staging validation)
+    var validateSw = Stopwatch.StartNew();
+
+    var validator = new BulkItemValidator(_dataverseService, _logger);
+
+    var validationResult = await validator.ValidateBatchItemsAsync(
+        bulkProcessorId,
+        bulkIngestionItemEntityName,
+        bulkIngestionItemParentLookupColumnName);
+
+    validateSw.Stop();
+
+    _logger.LogInformation(
+        "Validation result for batch {BulkProcessorId}: Valid={ValidCount}, Invalid={InvalidCount}, Duplicate={DuplicateCount}. CorrelationId: {CorrelationId}",
+        bulkProcessorId,
+        validationResult.ValidCount,
+        validationResult.InvalidCount,
+        validationResult.DuplicateCount,
+        request.CorrelationId);
+
+    _logger.LogInformation(
+        "Performance.SaveItemsValidation Batch={BulkProcessorId} Total={Total} Valid={Valid} Invalid={Invalid} Duplicate={Duplicate} Updated={Updated} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
+        bulkProcessorId,
+        validationResult.TotalCount,
+        validationResult.ValidCount,
+        validationResult.InvalidCount,
+        validationResult.DuplicateCount,
+        validationResult.UpdatedCount,
+        validateSw.ElapsedMilliseconds,
+        request.CorrelationId);
+
+    var recalcSw = Stopwatch.StartNew();
+
+    var allItemsQuery = new QueryExpression(bulkIngestionItemEntityName)
+    {
+        ColumnSet = new ColumnSet(validationStatusColumnName, "voa_isduplicate"),
+        Criteria = new FilterExpression()
+        {
+            Conditions =
+            {
+                new ConditionExpression(
+                    bulkIngestionItemParentLookupColumnName,
+                    ConditionOperator.Equal,
+                    bulkProcessorId),
+            }
+        }
+    };
+
+    var allItems = await _dataverseService.RetrieveMultipleAsync(allItemsQuery);
+    var recalculatedCounts = CalculateItemCounts(allItems);
+
     recalcSw.Stop();
 
-        _logger.LogInformation(
-            "Recalculated counters for batch {BulkProcessorId}: Total={TotalRows}, Valid={ValidCount}, Invalid={InvalidCount}, Duplicate={DuplicateCount}. CorrelationId: {CorrelationId}",
-            bulkProcessorId,
-            recalculatedCounts.TotalRows,
-            recalculatedCounts.ValidItemCount,
-            recalculatedCounts.InvalidItemCount,
-            recalculatedCounts.DuplicateItemCount,
-            request.CorrelationId);
+    _logger.LogInformation(
+        "Recalculated counters for batch {BulkProcessorId}: Total={TotalRows}, Valid={ValidCount}, Invalid={InvalidCount}, Duplicate={DuplicateCount}. CorrelationId: {CorrelationId}",
+        bulkProcessorId,
+        recalculatedCounts.TotalRows,
+        recalculatedCounts.ValidItemCount,
+        recalculatedCounts.InvalidItemCount,
+        recalculatedCounts.DuplicateItemCount,
+        request.CorrelationId);
 
-        // Update batch counters
-        var updateCountersSw = Stopwatch.StartNew();
-        bulkItemWriter.UpdateBatchCounters(bulkProcessorId, recalculatedCounts);
-        updateCountersSw.Stop();
+    // Update batch counters
+    var updateCountersSw = Stopwatch.StartNew();
 
-        saveItemsSw.Stop();
+    bulkItemWriter.UpdateBatchCounters(bulkProcessorId, recalculatedCounts);
 
-        _logger.LogInformation(
-            "SaveItems completed for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
-            bulkProcessorId,
-            request.CorrelationId);
-        _logger.LogInformation(
-            "Performance.SaveItemsSummary Batch={BulkProcessorId} RouteMode={RouteMode} SelectionInputCount={SelectionInputCount} CsvRowsParsed={CsvRowsParsed} UpsertRequests={UpsertRequests} TotalRows={TotalRows} ValidItems={ValidItems} InvalidItems={InvalidItems} DuplicateItems={DuplicateItems} RecalcElapsedMs={RecalcElapsedMs} CounterUpdateElapsedMs={CounterUpdateElapsedMs} TotalElapsedMs={TotalElapsedMs} CorrelationId={CorrelationId}",
-            bulkProcessorId,
-            request.SsuIds?.Count > 0 ? "BULK_SELECTION" : "BULK_FILE",
-            request.SsuIds?.Count ?? 0,
-            csvRowsParsed,
-            upsertRequests.Count,
-            recalculatedCounts.TotalRows,
-            recalculatedCounts.ValidItemCount,
-            recalculatedCounts.InvalidItemCount,
-            recalculatedCounts.DuplicateItemCount,
-            recalcSw.ElapsedMilliseconds,
-            updateCountersSw.ElapsedMilliseconds,
-            saveItemsSw.ElapsedMilliseconds,
-            request.CorrelationId);
-    }
+    updateCountersSw.Stop();
+
+    saveItemsSw.Stop();
+
+    _logger.LogInformation(
+        "SaveItems completed for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+        bulkProcessorId,
+        request.CorrelationId);
+
+    _logger.LogInformation(
+        "Performance.SaveItemsSummary Batch={BulkProcessorId} RouteMode={RouteMode} SelectionInputCount={SelectionInputCount} CsvRowsParsed={CsvRowsParsed} UpsertRequests={UpsertRequests} TotalRows={TotalRows} ValidItems={ValidItems} InvalidItems={InvalidItems} DuplicateItems={DuplicateItems} RecalcElapsedMs={RecalcElapsedMs} CounterUpdateElapsedMs={CounterUpdateElapsedMs} TotalElapsedMs={TotalElapsedMs} CorrelationId={CorrelationId}",
+        bulkProcessorId,
+        request.SsuIds?.Count > 0 ? "BULK_SELECTION" : "BULK_FILE",
+        request.SsuIds?.Count ?? 0,
+        csvRowsParsed,
+        bulkDataIngestionItemRequests.Count,
+        recalculatedCounts.TotalRows,
+        recalculatedCounts.ValidItemCount,
+        recalculatedCounts.InvalidItemCount,
+        recalculatedCounts.DuplicateItemCount,
+        recalcSw.ElapsedMilliseconds,
+        updateCountersSw.ElapsedMilliseconds,
+        saveItemsSw.ElapsedMilliseconds,
+        request.CorrelationId);
+}
 
     private async Task<RequestJobBatchResult> CreateRequestsAndJobsForValidItemsAsync(
         Guid bulkProcessorId,
@@ -1008,13 +1132,13 @@ public sealed class BulkDataRequestProcessor
             TotalRows = items.Entities.Count,
             ValidItemCount = items.Entities.Count(e =>
             {
-                var status = e.GetAttributeValue<string>(validationStatusColumnName) ?? string.Empty;
-                return status.Equals("Valid", StringComparison.OrdinalIgnoreCase);
+                var status = e.GetAttributeValue<OptionSetValue>(validationStatusColumnName)?.Value.ToString() ?? string.Empty;
+                return status.Equals((Constants.StatusCodes.Valid).ToString(), StringComparison.OrdinalIgnoreCase);
             }),
             InvalidItemCount = items.Entities.Count(e =>
             {
-                var status = e.GetAttributeValue<string>(validationStatusColumnName) ?? string.Empty;
-                return status.Equals("Invalid", StringComparison.OrdinalIgnoreCase);
+                var status = e.GetAttributeValue<OptionSetValue>(validationStatusColumnName)?.Value.ToString() ?? string.Empty;
+                return status.Equals((Constants.StatusCodes.Invalid).ToString(), StringComparison.OrdinalIgnoreCase);
             }),
             DuplicateItemCount = items.Entities.Count(e =>
             {
@@ -1023,13 +1147,13 @@ public sealed class BulkDataRequestProcessor
             }),
             ProcessedItemCount = items.Entities.Count(e =>
             {
-                var status = e.GetAttributeValue<string>(validationStatusColumnName) ?? string.Empty;
-                return status.Equals("Processed", StringComparison.OrdinalIgnoreCase);
+                var status = e.GetAttributeValue<OptionSetValue>(validationStatusColumnName)?.Value.ToString() ?? string.Empty;
+                return status.Equals((Constants.StatusCodes.Processed).ToString(), StringComparison.OrdinalIgnoreCase);
             }),
             FailedItemCount = items.Entities.Count(e =>
             {
-                var status = e.GetAttributeValue<string>(validationStatusColumnName) ?? string.Empty;
-                return status.Equals("Failed", StringComparison.OrdinalIgnoreCase);
+                var status = e.GetAttributeValue<OptionSetValue>(validationStatusColumnName)?.Value.ToString() ?? string.Empty;
+                return status.Equals((Constants.StatusCodes.Failed).ToString(), StringComparison.OrdinalIgnoreCase);
             }),
         };
 
@@ -1052,7 +1176,21 @@ public sealed class BulkDataRequestProcessor
     }
 
     private sealed record TemplateProcessingSettings(Guid? JobTypeId, bool CreateJob, bool FromTemplate, string? FormatLabel, int? FormatCode);
+    private static OrganizationRequest UpsertRequest(Guid guid)
+    {
+        ParameterCollection parameters = new ParameterCollection
+        {
+            { "HereditamentId", guid }
+        };
 
+        OrganizationRequest upsertHereditamentRequest = new OrganizationRequest()
+        {
+            RequestName = "voa_UpsertHereditamentLinkV1",
+            Parameters = parameters
+        };
+
+        return upsertHereditamentRequest;
+    }
 }
 
 
