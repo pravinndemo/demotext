@@ -7,6 +7,7 @@ using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Query;
 using System.Diagnostics;
 using System.Text.Json;
+using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Routing;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
@@ -136,6 +137,8 @@ public sealed class BulkDataRequestProcessor
                 decision.SourceType = creationResult.SourceType;
                 decision.StagingStatus = "Created";
                 decision.ReceivedCount = 1;
+                decision.RequestId = creationResult.RequestId;
+                decision.JobId = creationResult.JobId == Guid.Empty ? null : creationResult.JobId;
                 decision.Message = $"SVT request/job created successfully. RequestId={creationResult.RequestId:N}, JobId={creationResult.JobId:N}";
 
                 _logger.LogInformation(
@@ -356,13 +359,24 @@ public sealed class BulkDataRequestProcessor
                 // Continue processing even if status update fails, as staging may have partially succeeded
                 decision.Message += " [Warning: Status transition failed]";
             }
+
+            var submitWarning = await GetCrossBatchDuplicateWarningAsync(
+                request.BulkProcessorId,
+                bulkProcessorEntityName,
+                bulkIngestionItemEntityName,
+                bulkIngestionItemParentLookupColumnName,
+                validationMessageColumnName: Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason");
+            if (!string.IsNullOrWhiteSpace(submitWarning))
+            {
+                decision.Message += $" {submitWarning}";
+            }
         }
         else if (action == BulkRequestAction.SaveItems)
         {
             // SaveItems: create or update items from payload, recalculate counters
             try
             {
-                await HandleSaveItemsAsync(
+                var saveItemsWarning = await HandleSaveItemsAsync(
                     request,
                     request.BulkProcessorId,
                     bulkProcessorEntityName,
@@ -370,6 +384,10 @@ public sealed class BulkDataRequestProcessor
                     validItemCountColumnName);
 
                 decision.Message += " Items saved/updated. Batch remains in Draft.";
+                if (!string.IsNullOrWhiteSpace(saveItemsWarning))
+                {
+                    decision.Message += $" {saveItemsWarning}";
+                }
             }
             catch (Exception ex)
             {
@@ -398,7 +416,7 @@ public sealed class BulkDataRequestProcessor
 
         return new AcceptedResult(string.Empty, decision);
     }
-    private async Task HandleSaveItemsAsync(
+    private async Task<string?> HandleSaveItemsAsync(
     BulkDataRouteDecisionRequest request,
     Guid bulkProcessorId,
     string bulkProcessorEntityName,
@@ -778,7 +796,58 @@ public sealed class BulkDataRequestProcessor
         updateCountersSw.ElapsedMilliseconds,
         saveItemsSw.ElapsedMilliseconds,
         request.CorrelationId);
+
+    return validationResult.CrossBatchDuplicateBatches.Count > 0
+        ? CrossBatchDuplicateMessageHelper.BuildErrorMessage(validationResult.CrossBatchDuplicateBatches)
+        : null;
 }
+
+    private async Task<string?> GetCrossBatchDuplicateWarningAsync(
+        Guid bulkProcessorId,
+        string bulkProcessorEntityName,
+        string bulkIngestionItemEntityName,
+        string bulkIngestionItemParentLookupColumnName,
+        string validationMessageColumnName)
+    {
+        try
+        {
+            var query = new QueryExpression(bulkIngestionItemEntityName)
+            {
+                ColumnSet = new ColumnSet(validationMessageColumnName),
+                Criteria = new FilterExpression
+                {
+                    Conditions =
+                    {
+                        new ConditionExpression(bulkIngestionItemParentLookupColumnName, ConditionOperator.Equal, bulkProcessorId),
+                        new ConditionExpression(validationMessageColumnName, ConditionOperator.Like, "ERR_DUP_SSU_OTHER_BATCH%"),
+                    }
+                }
+            };
+
+            var result = await _dataverseService.RetrieveMultipleAsync(query);
+            var duplicateMessages = result.Entities
+                .Select(entity => entity.GetAttributeValue<string>(validationMessageColumnName)?.Trim())
+                .Where(message => !string.IsNullOrWhiteSpace(message))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (duplicateMessages.Count == 0)
+            {
+                return null;
+            }
+
+            return $"Cross-batch duplicate warning: {string.Join(" ", duplicateMessages)}";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Unable to build submit warning for batch {BulkProcessorId} using entity {BulkProcessorEntityName}.",
+                bulkProcessorId,
+                bulkProcessorEntityName);
+            return null;
+        }
+    }
 
     private async Task<RequestJobBatchResult> CreateRequestsAndJobsForValidItemsAsync(
         Guid bulkProcessorId,
@@ -799,6 +868,7 @@ public sealed class BulkDataRequestProcessor
         var validationMessageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason";
         var requestLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemRequestLookupColumnName") ?? "voa_requestlookup";
         var jobLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemJobLookupColumnName") ?? "voa_joblookup";
+        var processingStageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingStageColumnName") ?? "voa_processingstage";
         var processingRunIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingRunIdColumnName") ?? "voa_processingrunid";
         var processingTimestampColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingTimestampColumnName") ?? "voa_processingtimestamp";
         var processingAttemptCountColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingAttemptCountColumnName") ?? "voa_processingattemptcount";
@@ -827,6 +897,7 @@ public sealed class BulkDataRequestProcessor
                 AttemptCount: entity.GetAttributeValue<int?>(processingAttemptCountColumnName) ?? 0,
                 Payload: new RequestJobCreateItem
                 {
+                    ItemId = entity.Id,
                     SsuId = entity.GetAttributeValue<string>(ssuIdColumnName) ?? string.Empty,
                     SourceType = sourceType,
                     SourceValue = entity.GetAttributeValue<string>(sourceValueColumnName) ?? string.Empty,
@@ -850,22 +921,26 @@ public sealed class BulkDataRequestProcessor
         {
             foreach (var item in createItems)
             {
-                var existsInOtherBatch = await SsuIdExistsInOtherBatchesAsync(
+                var conflictingBatches = await SsuIdExistsInOtherBatchesAsync(
                     bulkProcessorId,
                     item.Payload.SsuId,
                     bulkIngestionItemEntityName,
                     bulkIngestionItemParentLookupColumnName,
-                    ssuIdColumnName);
+                    ssuIdColumnName,
+                    bulkProcessorEntityName);
 
-                if (existsInOtherBatch)
+                if (conflictingBatches.Count > 0)
                 {
+                    var duplicateMessage = CrossBatchDuplicateMessageHelper.BuildErrorMessage(conflictingBatches);
+
                     duplicateFailures.Add(new RequestJobCreateResult
                     {
                         Success = false,
                         SsuId = item.Payload.SsuId,
                         SourceType = sourceType,
                         ErrorCode = "ERR_DUP_SSU_OTHER_BATCH",
-                        ErrorMessage = "SSU ID already exists in another batch.",
+                        ErrorMessage = duplicateMessage,
+                        FailureStageCode = StatusCodes.StageValidation,
                     });
 
                     failedByEntityId[item.EntityId] = duplicateFailures[^1];
@@ -941,6 +1016,9 @@ public sealed class BulkDataRequestProcessor
                 [validationMessageColumnName] = outcome.Success
                     ? (createJob ? "Request/job created successfully." : "Request created successfully in Request Only mode.")
                     : $"{outcome.ErrorCode}: {outcome.ErrorMessage}",
+                [processingStageColumnName] = outcome.Success
+                    ? new OptionSetValue(StatusCodes.StageCompleted)
+                    : new OptionSetValue(outcome.FailureStageCode ?? StatusCodes.StageRequestCreation),
                 [processingTimestampColumnName] = DateTime.UtcNow,
                 [processingAttemptCountColumnName] = item.AttemptCount + 1,
             };
@@ -1023,17 +1101,18 @@ public sealed class BulkDataRequestProcessor
         return createResult;
     }
 
-    private async Task<bool> SsuIdExistsInOtherBatchesAsync(
+    private async Task<List<CrossBatchDuplicateBatchInfo>> SsuIdExistsInOtherBatchesAsync(
         Guid bulkProcessorId,
         string ssuId,
         string bulkIngestionItemEntityName,
         string bulkIngestionItemParentLookupColumnName,
-        string ssuIdColumnName)
+        string ssuIdColumnName,
+        string bulkProcessorEntityName)
     {
         var query = new QueryExpression(bulkIngestionItemEntityName)
         {
-            ColumnSet = new ColumnSet(false),
-            PageInfo = new PagingInfo { PageNumber = 1, Count = 1 },
+            ColumnSet = new ColumnSet(bulkIngestionItemParentLookupColumnName),
+            PageInfo = new PagingInfo { PageNumber = 1, Count = 5000 },
             Criteria = new FilterExpression
             {
                 Conditions =
@@ -1044,8 +1123,60 @@ public sealed class BulkDataRequestProcessor
             }
         };
 
-        var result = await _dataverseService.RetrieveMultipleAsync(query);
-        return result.Entities.Count > 0;
+        var conflictBatchIds = new HashSet<Guid>();
+        do
+        {
+            var result = await _dataverseService.RetrieveMultipleAsync(query);
+            foreach (var entity in result.Entities)
+            {
+                var parentBatch = entity.GetAttributeValue<EntityReference>(bulkIngestionItemParentLookupColumnName);
+                if (parentBatch is null || parentBatch.Id == Guid.Empty || parentBatch.Id == bulkProcessorId)
+                {
+                    continue;
+                }
+
+                conflictBatchIds.Add(parentBatch.Id);
+            }
+
+            if (!result.MoreRecords)
+            {
+                break;
+            }
+
+            query.PageInfo.PageNumber++;
+            query.PageInfo.PagingCookie = result.PagingCookie;
+        } while (true);
+
+        var conflicts = new List<CrossBatchDuplicateBatchInfo>(conflictBatchIds.Count);
+        foreach (var conflictBatchId in conflictBatchIds)
+        {
+            string batchName = string.Empty;
+
+            try
+            {
+                var batch = await _dataverseService.RetrieveAsync(
+                    bulkProcessorEntityName,
+                    conflictBatchId,
+                    new ColumnSet("voa_name"));
+                batchName = batch.GetAttributeValue<string>("voa_name")?.Trim() ?? string.Empty;
+            }
+            catch (Exception lookupEx)
+            {
+                _logger.LogWarning(
+                    lookupEx,
+                    "Unable to resolve batch name for duplicate SSU {SsuId} in batch {BatchId}",
+                    ssuId,
+                    conflictBatchId);
+            }
+
+            conflicts.Add(new CrossBatchDuplicateBatchInfo
+            {
+                BatchId = conflictBatchId,
+                BatchName = batchName,
+            });
+        }
+
+        return conflicts;
     }
 
     private async Task<TemplateProcessingSettings> ResolveTemplateProcessingSettingsAsync(Entity bulkProcessor)

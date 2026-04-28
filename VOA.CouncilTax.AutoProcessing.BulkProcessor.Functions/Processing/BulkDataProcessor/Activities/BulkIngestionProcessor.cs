@@ -237,14 +237,20 @@ public class BulkIngestionProcessor
             }
 
             var parentIngestionId = item.GetAttributeValue<EntityReference>(ItemParentLookupColumn)?.Id ?? Guid.Empty;
+            List<CrossBatchDuplicateBatchInfo> conflictingBatches = new();
             if (checkCrossBatchDuplicates &&
-                parentIngestionId != Guid.Empty &&
-                await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId))
+                parentIngestionId != Guid.Empty)
             {
+                conflictingBatches = await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId);
+            }
+
+            if (conflictingBatches.Count > 0)
+            {
+                var duplicateMessage = CrossBatchDuplicateMessageHelper.BuildErrorMessage(conflictingBatches);
                 await TryMarkItemAsFailedAsync(
                     itemId: item.Id,
                     stageCode: StatusCodes.StageValidation,
-                    errorMessage: "ERR_DUP_SSU_OTHER_BATCH: SSU ID already exists in another batch.",
+                    errorMessage: duplicateMessage,
                     canReprocess: false);
 
                 crossBatchRejectedCount++;
@@ -252,7 +258,7 @@ public class BulkIngestionProcessor
                 {
                     ItemId = item.Id,
                     Success = false,
-                    Error = "ERR_DUP_SSU_OTHER_BATCH"
+                    Error = duplicateMessage
                 });
                 continue;
             }
@@ -262,6 +268,7 @@ public class BulkIngestionProcessor
                 item,
                 new RequestJobCreateItem
                 {
+                    ItemId = item.Id,
                     SsuId = ssuId,
                     SourceType = timerContext.SourceType,
                     SourceValue = item.GetAttributeValue<string>("voa_sourcevalue") ?? ssuId
@@ -334,7 +341,7 @@ public class BulkIngestionProcessor
                 var isTransient = string.Equals(outcome.ErrorCode, "CREATION_FAILED", StringComparison.OrdinalIgnoreCase);
                 await TryMarkItemAsFailedAsync(
                     itemId: item.Id,
-                    stageCode: StatusCodes.StageRequestCreation,
+                    stageCode: outcome.FailureStageCode ?? StatusCodes.StageRequestCreation,
                     errorMessage: $"{outcome.ErrorCode}: {outcome.ErrorMessage}",
                     canReprocess: isTransient);
 
@@ -440,27 +447,34 @@ public class BulkIngestionProcessor
                 //   2. ssuId is not blank               →  there is something to check
                 //   3. SsuIdExistsInOtherBatchesAsync   →  same SSU ID exists under a DIFFERENT parent ingestion
                 // e.g. Item-B: ssuId = "SSU-002" is found under a different parent → all three = true → rejected
+                List<CrossBatchDuplicateBatchInfo> conflictingBatches = new();
                 if (parentIngestionId != Guid.Empty &&
-                    !string.IsNullOrWhiteSpace(ssuId) &&
-                    await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId))
+                    !string.IsNullOrWhiteSpace(ssuId))
                 {
+                    conflictingBatches = await SsuIdExistsInOtherBatchesAsync(parentIngestionId, ssuId);
+                }
+
+                if (conflictingBatches.Count > 0)
+                {
+                    var duplicateMessage = CrossBatchDuplicateMessageHelper.BuildErrorMessage(conflictingBatches);
+
                     // Mark the item as permanently failed in Dataverse.
                     // canReprocess = false because this is a data integrity issue, not a transient error.
                     // e.g. Item-B: voa_validationstatus = ItemFailed, voa_canreprocess = false
                     await TryMarkItemAsFailedAsync(
                         itemId: item.Id,
                         stageCode: StatusCodes.StageValidation,
-                        errorMessage: "ERR_DUP_SSU_OTHER_BATCH: SSU ID already exists in another batch.",
+                        errorMessage: duplicateMessage,
                         canReprocess: false);
                     crossBatchRejectedCount++;
 
                     // Record the failure in results so the caller knows this item failed.
-                    // e.g. results now contains: [{ Item-B, Success=false, Error="ERR_DUP_SSU_OTHER_BATCH..." }]
+                    // e.g. results now contains the batch conflict details for Item-B.
                     results.Add(new ItemProcessingResult
                     {
                         ItemId = item.Id,
                         Success = false,
-                        Error = "ERR_DUP_SSU_OTHER_BATCH: SSU ID already exists in another batch."
+                        Error = duplicateMessage
                     });
 
                     // Skip to the next item — this one does NOT get added to itemsToProcess.
@@ -589,12 +603,12 @@ public class BulkIngestionProcessor
         return results;
     }
 
-    private async Task<bool> SsuIdExistsInOtherBatchesAsync(Guid parentIngestionId, string ssuId)
+    private async Task<List<CrossBatchDuplicateBatchInfo>> SsuIdExistsInOtherBatchesAsync(Guid parentIngestionId, string ssuId)
     {
         var query = new QueryExpression(ItemEntityName)
         {
-            ColumnSet = new ColumnSet(false),
-            PageInfo = new PagingInfo { PageNumber = 1, Count = 1 },
+            ColumnSet = new ColumnSet(ItemParentLookupColumn),
+            PageInfo = new PagingInfo { PageNumber = 1, Count = 5000 },
             Criteria = new FilterExpression
             {
                 Conditions =
@@ -605,8 +619,60 @@ public class BulkIngestionProcessor
             }
         };
 
-        var result = await _crmService.RetrieveMultipleAsync(query);
-        return result.Entities.Count > 0;
+        var conflictBatchIds = new HashSet<Guid>();
+        do
+        {
+            var result = await _crmService.RetrieveMultipleAsync(query);
+            foreach (var entity in result.Entities)
+            {
+                var parentBatch = entity.GetAttributeValue<EntityReference>(ItemParentLookupColumn);
+                if (parentBatch is null || parentBatch.Id == Guid.Empty || parentBatch.Id == parentIngestionId)
+                {
+                    continue;
+                }
+
+                conflictBatchIds.Add(parentBatch.Id);
+            }
+
+            if (!result.MoreRecords)
+            {
+                break;
+            }
+
+            query.PageInfo.PageNumber++;
+            query.PageInfo.PagingCookie = result.PagingCookie;
+        } while (true);
+
+        var conflicts = new List<CrossBatchDuplicateBatchInfo>(conflictBatchIds.Count);
+        foreach (var conflictBatchId in conflictBatchIds)
+        {
+            string batchName = string.Empty;
+
+            try
+            {
+                var batch = await _crmService.RetrieveAsync(
+                    "voa_bulkingestion",
+                    conflictBatchId,
+                    new ColumnSet("voa_name"));
+                batchName = batch.GetAttributeValue<string>("voa_name")?.Trim() ?? string.Empty;
+            }
+            catch (Exception lookupEx)
+            {
+                _logger.LogWarning(
+                    lookupEx,
+                    "Unable to resolve batch name for duplicate SSU {SsuId} in batch {BatchId}",
+                    ssuId,
+                    conflictBatchId);
+            }
+
+            conflicts.Add(new CrossBatchDuplicateBatchInfo
+            {
+                BatchId = conflictBatchId,
+                BatchName = batchName,
+            });
+        }
+
+        return conflicts;
     }
 
     private static bool GetBooleanFlag(string key, bool defaultValue)
@@ -951,7 +1017,11 @@ public class BulkIngestionProcessor
                 [ItemLockedForProcessingColumn] = false,
             };
 
-            await _crmService.UpdateAsync(entity);
+            await RetryAsync(async () =>
+            {
+                await _crmService.UpdateAsync(entity);
+                return true;
+            }, $"MarkItemFailed {itemId}", MaxRetries);
         }
         catch (Exception ex)
         {
@@ -989,7 +1059,11 @@ public class BulkIngestionProcessor
                 update[ItemProcessingAttemptCountColumn] = attemptCount + 1;
             }
 
-            await _crmService.UpdateAsync(update);
+            await RetryAsync(async () =>
+            {
+                await _crmService.UpdateAsync(update);
+                return true;
+            }, $"UpdateProcessingState {itemId}", MaxRetries);
         }
         catch (Exception ex)
         {

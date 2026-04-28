@@ -18,6 +18,10 @@ public sealed class BulkDataRouteDecisionResponse
 
     public int? ReceivedCount { get; set; }
 
+    public Guid? RequestId { get; set; }
+
+    public Guid? JobId { get; set; }
+
     public List<string>? SsuIds { get; set; }
 
     public string? SsuId { get; set; }
