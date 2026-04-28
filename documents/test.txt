@@ -1,0 +1,60 @@
+Confirm UI prerequisites.
+User can open Bulk Processor form with a valid bulkProcessorId.
+Required UI fields are populated before action buttons are enabled.
+Validate request shape from UI.
+Selection mode sends bulkProcessorId + ssuIds[].
+CSV mode sends bulkProcessorId + fileColumnName (file already stored in Dataverse).
+No mixed payload (SVT fields must not be sent from bulk UI actions).
+Validate client-side guards.
+Prevent submit when no items selected/uploaded.
+Show clear inline message for missing required fields.
+Disable duplicate-click submissions (debounce or in-flight lock).
+Validate headers and tracing.
+Send correlationId for every request.
+Send auth token expected by APIM/Custom API.
+Send content type application/json.
+Validate UI handling of Custom API responses.
+Success response updates UI state (accepted=true path).
+Validation errors show API code and friendly message.
+Transient failures show retry guidance and preserve user input.
+Validate negative payload tests from UI.
+Empty body.
+Invalid JSON (if possible via test harness).
+Missing bulkProcessorId.
+Invalid route combination.
+Validate observability.
+UI logs/store has request timestamp, correlationId, endpoint, result code.
+Support team can trace a UI request end-to-end using correlationId.
+Custom API -> Azure Function Checklist
+
+Confirm endpoint mapping in Custom API.
+Save-items maps to POST /bulk-data/save-items.
+Submit maps to POST /bulk-data/submit-batch.
+Optional SVT maps to POST /bulk-data/svt-single only for SVT flow.
+Validate forwarded payload contract.
+Forward fields without mutation/loss: bulkProcessorId, ssuIds, fileColumnName, requestedBy, correlationId.
+Ensure null/empty fields are handled consistently (not silently dropped if required downstream).
+Validate authentication and network.
+Managed identity/key config from Custom API to Function is valid.
+Function URL/route and APIM backend config are correct in each environment.
+Timeout settings allow expected function latency for staging calls.
+Validate response propagation.
+Pass through Function accepted, code, message, and correlationId.
+Preserve meaningful HTTP status behavior for callers.
+Do not replace specific Function error codes with generic ones.
+Validate Function-side rule enforcement through API.
+Route mismatches return expected code (INVALID_ROUTE_FOR_ENDPOINT).
+Bulk actions without bulkProcessorId return BULK_PROCESSOR_ID_REQUIRED.
+Submit prechecks return expected codes (NO_ITEMS_TO_SUBMIT, NO_VALID_ITEMS_TO_SUBMIT, etc.).
+Validate status transition outcomes.
+SaveItems keeps batch in Draft.
+Submit attempts Draft -> Queued.
+Item statuses update correctly (Pending/Valid/Invalid/Duplicate/Processed/Failed).
+Validate resilience.
+Retry policy at API gateway layer does not create duplicate processing.
+Idempotency behavior is verified for repeated same payload.
+Correlation is preserved across retries and failures.
+Validate logging and diagnostics.
+Custom API logs inbound request + outbound Function call + response.
+Azure Function logs include same correlationId.
+Dashboard/query can trace UI -> Custom API -> Function in one search.
