@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.PowerPlatform.Dataverse.Client;
@@ -22,7 +23,9 @@ public class BulkIngestionProcessor
     private readonly IOrganizationServiceAsync2 _crmService;
     private readonly ILogger _logger;
 
-    private const int BatchSize = 1000;
+    // BatchSize is configurable via environment variable BulkTimerBatchSize (default: 200, range 1-5000).
+    // See README.md for documentation.
+    private static int BatchSize => GetIntConfigValue("BulkTimerBatchSize", defaultValue: 200, min: 1, max: 5000);
     private const int MaxRetries = 3;
     private const int BaseDelayMs = 500;
     private const string ItemEntityName = "voa_bulkingestionitem";
@@ -133,10 +136,13 @@ public class BulkIngestionProcessor
             TotalItems = validItems.Count
         };
 
-        for (int batchStart = 0; batchStart < validItems.Count; batchStart += BatchSize)
+        // Snapshot BatchSize once so all calculations in this invocation use a consistent value.
+        var batchSize = BatchSize;
+
+        for (int batchStart = 0; batchStart < validItems.Count; batchStart += batchSize)
         {
-            List<Entity> batch = validItems.Skip(batchStart).Take(BatchSize).ToList();
-            int batchNumber = (batchStart / BatchSize) + 1;
+            List<Entity> batch = validItems.Skip(batchStart).Take(batchSize).ToList();
+            int batchNumber = (batchStart / batchSize) + 1;
 
             _logger.LogInformation($"Batch {batchNumber} | {batch.Count} items");
 
@@ -160,7 +166,7 @@ public class BulkIngestionProcessor
 
         ingestionSw.Stop();
         var finalStatus = await DetermineFinalIngestionStatusAsync(ingestionResult);
-        var batchCount = (int)Math.Ceiling(validItems.Count / (double)BatchSize);
+        var batchCount = (int)Math.Ceiling(validItems.Count / (double)batchSize);
         _logger.LogInformation(
             "Performance.TimerIngestionSummary ProcessingRunId={ProcessingRunId} IngestionId={IngestionId} ValidItems={ValidItems} SuccessCount={SuccessCount} FailureCount={FailureCount} Batches={BatchCount} FinalStatus={FinalStatus} TotalElapsedMs={TotalElapsedMs}",
             processingRunId,
@@ -592,11 +598,25 @@ public class BulkIngestionProcessor
 
         if (failedItems.Any())
         {
-            // Retry each failed item individually and concurrently.
-            // RetrySingleItemAsync will attempt up to 3 times, then classify the error as transient
-            // (canReprocess = true) or permanent (canReprocess = false) if all retries are exhausted.
-            // e.g. Item-C: retried individually → succeeds on attempt 2 → Success = true
-            var retryTasks = failedItems.Select(RetrySingleItemAsync);
+            // Retry each failed item individually with bounded concurrency to avoid
+            // hammering Dataverse when many items fail simultaneously.
+            // BulkSingleItemRetryMaxConcurrency controls max parallel retries (default: 10, range 1-100).
+            var maxRetryConcurrency = GetIntConfigValue("BulkSingleItemRetryMaxConcurrency", defaultValue: 10, min: 1, max: 100);
+            using var retrySemaphore = new SemaphoreSlim(maxRetryConcurrency);
+
+            var retryTasks = failedItems.Select(async item =>
+            {
+                await retrySemaphore.WaitAsync();
+                try
+                {
+                    return await RetrySingleItemAsync(item);
+                }
+                finally
+                {
+                    retrySemaphore.Release();
+                }
+            });
+
             results.AddRange(await Task.WhenAll(retryTasks));
         }
 
@@ -623,6 +643,26 @@ public class BulkIngestionProcessor
     {
         var raw = Environment.GetEnvironmentVariable(key);
         return bool.TryParse(raw, out var parsed) ? parsed : defaultValue;
+    }
+
+    /// <summary>
+    /// Reads an integer environment variable and clamps it to [<paramref name="min"/>, <paramref name="max"/>].
+    /// Returns <paramref name="defaultValue"/> when the value is absent, unparseable, or out of range.
+    /// </summary>
+    private static int GetIntConfigValue(string key, int defaultValue, int min = 1, int max = int.MaxValue)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (raw is null)
+        {
+            return defaultValue;
+        }
+
+        if (!int.TryParse(raw, out var parsed) || parsed < min || parsed > max)
+        {
+            return defaultValue;
+        }
+
+        return parsed;
     }
 
     private async Task<ItemProcessingResult> RetrySingleItemAsync(Entity item)

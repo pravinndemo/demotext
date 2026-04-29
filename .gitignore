@@ -1,0 +1,15 @@
+# Build artifacts
+**/bin/
+**/obj/
+
+# User-specific files
+*.user
+*.suo
+.vs/
+
+# Azure Functions local settings (contains secrets)
+local.settings.json
+
+# NuGet packages
+*.nupkg
+packages/

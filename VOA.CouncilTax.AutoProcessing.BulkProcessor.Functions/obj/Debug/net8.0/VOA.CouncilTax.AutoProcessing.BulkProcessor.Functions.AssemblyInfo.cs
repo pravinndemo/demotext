@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ef7d41a3867c5ed54dca443ab410423d7c6d7b8b")]
 [assembly: System.Reflection.AssemblyProductAttribute("VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions")]
 [assembly: System.Reflection.AssemblyTitleAttribute("VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

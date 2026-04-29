@@ -448,6 +448,13 @@ public sealed class BulkDataRequestProcessor
     var assignedTeamColumn =
         Environment.GetEnvironmentVariable("BulkIngestionItemAssignedTeam") ?? "voa_assignedteam";
 
+    // Chunk size and retry configuration with safe defaults.
+    // See README.md for documentation on these environment variables.
+    var executeMultipleChunkSize = GetChunkSizeFlag("BulkSaveItemsExecuteMultipleChunkSize", defaultValue: 100, min: 1, max: 1000);
+    var itemUpsertChunkSize = GetChunkSizeFlag("BulkSaveItemsItemUpsertChunkSize", defaultValue: 100, min: 1, max: 1000);
+    var chunkMaxRetries = GetChunkSizeFlag("BulkSaveItemsMaxRetries", defaultValue: 3, min: 0, max: 10);
+    var chunkBaseDelayMs = GetChunkSizeFlag("BulkSaveItemsBaseDelayMs", defaultValue: 500, min: 50, max: 30000);
+
     var pendingStatusValue = new OptionSetValue(Constants.StatusCodes.Pending);
 
     var assignmentMode = GetOptionSetValueOrNull(bulkIngestion, "voa_assignmentmode");
@@ -479,15 +486,8 @@ public sealed class BulkDataRequestProcessor
     var bulkItemWriter = new DataverseBulkItemWriter(_dataverseService);
     var bulkDataIngestionItemRequests = new List<OrganizationRequest>();
 
-    var upsertRequest = new ExecuteMultipleRequest()
-    {
-        Settings = new ExecuteMultipleSettings()
-        {
-            ContinueOnError = true,
-            ReturnResponses = true
-        },
-        Requests = new OrganizationRequestCollection()
-    };
+    // Build flat list of voa_UpsertHereditamentLinkV1 requests; executed in chunks below.
+    var executeMultipleRequests = new List<OrganizationRequest>();
 
     var csvRowsParsed = 0;
 
@@ -544,7 +544,7 @@ public sealed class BulkDataRequestProcessor
         {
             Entity itemEntity;
 
-            upsertRequest.Requests.Add(UpsertRequest(ssuId.StatutorySpatialUnitId));
+            executeMultipleRequests.Add(UpsertRequest(ssuId.StatutorySpatialUnitId));
 
             if (existingBySSUId.TryGetValue(ssuId.StatutorySpatialUnitId.ToString(), out var existingItem))
             {
@@ -611,7 +611,7 @@ public sealed class BulkDataRequestProcessor
             // Build upsert requests from CSV rows
             foreach (var csvRow in csvRows)
             {
-                upsertRequest.Requests.Add(UpsertRequest(new Guid(csvRow.SsuId)));
+                executeMultipleRequests.Add(UpsertRequest(new Guid(csvRow.SsuId)));
 
                 var itemEntity = new Entity(bulkIngestionItemEntityName)
                 {
@@ -658,41 +658,81 @@ public sealed class BulkDataRequestProcessor
         }
     }
 
-    // Execute batch writes if any
-    if (bulkDataIngestionItemRequests.Count > 0)
+    // Execute batch writes in chunks with retry and graceful partial-success handling.
+    string? writeChunkWarning = null;
+    if (executeMultipleRequests.Count > 0 || bulkDataIngestionItemRequests.Count > 0)
     {
         var writeSw = Stopwatch.StartNew();
+        var allChunkErrors = new List<string>();
+        var totalSucceededChunks = 0;
+        var totalFailedChunks = 0;
 
-        await _dataverseService.ExecuteAsync(upsertRequest);
+        // 1) voa_UpsertHereditamentLinkV1 requests in chunks
+        if (executeMultipleRequests.Count > 0)
+        {
+            _logger.LogInformation(
+                "Executing ExecuteMultiple in chunks. TotalRequests={TotalRequests} ChunkSize={ChunkSize} CorrelationId={CorrelationId}",
+                executeMultipleRequests.Count, executeMultipleChunkSize, request.CorrelationId);
 
-        var writeResult = bulkItemWriter.ExecuteItemRequestsAsync(bulkDataIngestionItemRequests);
+            var (succeeded, failed, errors) = await ExecuteMultipleInChunksAsync(
+                executeMultipleRequests,
+                executeMultipleChunkSize,
+                chunkMaxRetries,
+                chunkBaseDelayMs,
+                "SaveItems.ExecuteMultiple",
+                request.CorrelationId);
+
+            totalSucceededChunks += succeeded;
+            totalFailedChunks += failed;
+            allChunkErrors.AddRange(errors);
+        }
+
+        // 2) Bulk ingestion item upserts in chunks
+        if (bulkDataIngestionItemRequests.Count > 0)
+        {
+            _logger.LogInformation(
+                "Executing ingestion item upserts in chunks. TotalRequests={TotalRequests} ChunkSize={ChunkSize} CorrelationId={CorrelationId}",
+                bulkDataIngestionItemRequests.Count, itemUpsertChunkSize, request.CorrelationId);
+
+            var (succeeded, failed, errors) = await ExecuteMultipleInChunksAsync(
+                bulkDataIngestionItemRequests,
+                itemUpsertChunkSize,
+                chunkMaxRetries,
+                chunkBaseDelayMs,
+                "SaveItems.ItemUpserts",
+                request.CorrelationId);
+
+            totalSucceededChunks += succeeded;
+            totalFailedChunks += failed;
+            allChunkErrors.AddRange(errors);
+        }
 
         writeSw.Stop();
 
         _logger.LogInformation(
-            "Batch upsert completed for batch {BulkProcessorId}: {SuccessCount} succeeded, {FailureCount} failed. CorrelationId: {CorrelationId}",
+            "Performance.SaveItemsWrite Batch={BulkProcessorId} ExecuteMultipleRequests={ExecuteMultipleRequests} ItemUpsertRequests={ItemUpsertRequests} SucceededChunks={SucceededChunks} FailedChunks={FailedChunks} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
             bulkProcessorId,
-            writeResult.Result.SucceededOperationCount,
-            writeResult.Result.FailedOperationCount,
-            request.CorrelationId);
-
-        _logger.LogInformation(
-            "Performance.SaveItemsWrite Batch={BulkProcessorId} Requested={Requested} Succeeded={Succeeded} Failed={Failed} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
-            bulkProcessorId,
-            writeResult.Result.RequestedOperationCount,
-            writeResult.Result.SucceededOperationCount,
-            writeResult.Result.FailedOperationCount,
+            executeMultipleRequests.Count,
+            bulkDataIngestionItemRequests.Count,
+            totalSucceededChunks,
+            totalFailedChunks,
             writeSw.ElapsedMilliseconds,
             request.CorrelationId);
 
-        if (writeResult.Result.Errors.Count > 0)
+        if (allChunkErrors.Count > 0)
         {
+            if (totalSucceededChunks == 0)
+            {
+                // All chunks failed — escalate so the caller returns an error response.
+                throw new InvalidOperationException(
+                    $"All write chunks failed for batch {bulkProcessorId}. Errors: {string.Join("; ", allChunkErrors)}");
+            }
+
+            // Some chunks succeeded — record as warning and continue (partial success).
+            writeChunkWarning = $"[PartialWriteFailure: {totalFailedChunks} of {totalSucceededChunks + totalFailedChunks} chunk(s) failed. First error: {allChunkErrors[0]}]";
             _logger.LogWarning(
-                "Errors during batch write for batch {BulkProcessorId}: {ErrorCount} errors. First error: {FirstError}. CorrelationId: {CorrelationId}",
-                bulkProcessorId,
-                writeResult.Result.Errors.Count,
-                writeResult.Result.Errors.FirstOrDefault() ?? "N/A",
-                request.CorrelationId);
+                "Partial chunk failure during SaveItems. FailedChunks={FailedChunks} TotalChunks={TotalChunks} CorrelationId={CorrelationId}",
+                totalFailedChunks, totalSucceededChunks + totalFailedChunks, request.CorrelationId);
         }
     }
 
@@ -773,11 +813,12 @@ public sealed class BulkDataRequestProcessor
         request.CorrelationId);
 
     _logger.LogInformation(
-        "Performance.SaveItemsSummary Batch={BulkProcessorId} RouteMode={RouteMode} SelectionInputCount={SelectionInputCount} CsvRowsParsed={CsvRowsParsed} UpsertRequests={UpsertRequests} TotalRows={TotalRows} ValidItems={ValidItems} InvalidItems={InvalidItems} DuplicateItems={DuplicateItems} RecalcElapsedMs={RecalcElapsedMs} CounterUpdateElapsedMs={CounterUpdateElapsedMs} TotalElapsedMs={TotalElapsedMs} CorrelationId={CorrelationId}",
+        "Performance.SaveItemsSummary Batch={BulkProcessorId} RouteMode={RouteMode} SelectionInputCount={SelectionInputCount} CsvRowsParsed={CsvRowsParsed} ExecuteMultipleRequests={ExecuteMultipleRequests} ItemUpsertRequests={ItemUpsertRequests} TotalRows={TotalRows} ValidItems={ValidItems} InvalidItems={InvalidItems} DuplicateItems={DuplicateItems} RecalcElapsedMs={RecalcElapsedMs} CounterUpdateElapsedMs={CounterUpdateElapsedMs} TotalElapsedMs={TotalElapsedMs} CorrelationId={CorrelationId}",
         bulkProcessorId,
         request.SsuIds?.Count > 0 ? "BULK_SELECTION" : "BULK_FILE",
         request.SsuIds?.Count ?? 0,
         csvRowsParsed,
+        executeMultipleRequests.Count,
         bulkDataIngestionItemRequests.Count,
         recalculatedCounts.TotalRows,
         recalculatedCounts.ValidItemCount,
@@ -788,9 +829,13 @@ public sealed class BulkDataRequestProcessor
         saveItemsSw.ElapsedMilliseconds,
         request.CorrelationId);
 
-    return validationResult.CrossBatchDuplicateBatches.Count > 0
-        ? CrossBatchDuplicateMessageHelper.BuildErrorMessage(validationResult.CrossBatchDuplicateBatches)
-        : null;
+    var warnings = new List<string>();
+    if (validationResult.CrossBatchDuplicateBatches.Count > 0)
+        warnings.Add(CrossBatchDuplicateMessageHelper.BuildErrorMessage(validationResult.CrossBatchDuplicateBatches));
+    if (writeChunkWarning is not null)
+        warnings.Add(writeChunkWarning);
+
+    return warnings.Count > 0 ? string.Join(" ", warnings) : null;
 }
 
     private async Task<string?> GetCrossBatchDuplicateWarningAsync(
@@ -1223,6 +1268,156 @@ public sealed class BulkDataRequestProcessor
     }
 
     private sealed record TemplateProcessingSettings(Guid? JobTypeId, bool CreateJob, bool FromTemplate, string? FormatLabel, int? FormatCode);
+
+    /// <summary>
+    /// Reads an integer environment variable and clamps it to [min, max].
+    /// Logs a warning and returns <paramref name="defaultValue"/> when the value is absent, unparseable, or out of range.
+    /// </summary>
+    private int GetChunkSizeFlag(string key, int defaultValue, int min = 1, int max = 1000)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (raw is null)
+        {
+            return defaultValue;
+        }
+
+        if (!int.TryParse(raw, out var parsed))
+        {
+            _logger.LogWarning(
+                "Configuration key {Key} has an invalid integer value '{Value}'. Using default {Default}.",
+                key, raw, defaultValue);
+            return defaultValue;
+        }
+
+        if (parsed < min || parsed > max)
+        {
+            _logger.LogWarning(
+                "Configuration key {Key} value {Parsed} is out of range [{Min}, {Max}]. Using default {Default}.",
+                key, parsed, min, max, defaultValue);
+            return defaultValue;
+        }
+
+        return parsed;
+    }
+
+    /// <summary>
+    /// Retries <paramref name="operation"/> up to <paramref name="maxRetries"/> times using
+    /// exponential back-off starting at <paramref name="baseDelayMs"/> ms.
+    /// </summary>
+    private async Task<T> RetryWithBackoffAsync<T>(
+        Func<Task<T>> operation,
+        string operationName,
+        int maxRetries,
+        int baseDelayMs,
+        string? correlationId)
+    {
+        var attempt = 0;
+        while (true)
+        {
+            try
+            {
+                return await operation();
+            }
+            catch (Exception ex) when (attempt < maxRetries)
+            {
+                attempt++;
+                var delay = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                _logger.LogWarning(
+                    ex,
+                    "Retry {OperationName} attempt {Attempt}/{MaxRetries}. DelayMs={Delay}. CorrelationId={CorrelationId}",
+                    operationName, attempt, maxRetries, delay, correlationId);
+                await Task.Delay(delay);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Executes a list of <see cref="OrganizationRequest"/>s as multiple smaller
+    /// <see cref="ExecuteMultipleRequest"/> calls (chunks), each retried with exponential back-off.
+    /// Uses <c>ContinueOnError=true</c> per chunk so individual item faults don't abort the chunk.
+    /// </summary>
+    /// <returns>
+    /// A tuple of succeeded chunk count, failed chunk count, and per-chunk error messages for
+    /// any chunk that exhausted retries.
+    /// </returns>
+    private async Task<(int SucceededChunks, int FailedChunks, List<string> Errors)> ExecuteMultipleInChunksAsync(
+        List<OrganizationRequest> requests,
+        int chunkSize,
+        int maxRetries,
+        int baseDelayMs,
+        string operationName,
+        string? correlationId)
+    {
+        var succeededChunks = 0;
+        var failedChunks = 0;
+        var errors = new List<string>();
+
+        if (requests.Count == 0)
+        {
+            return (succeededChunks, failedChunks, errors);
+        }
+
+        var total = requests.Count;
+        var totalChunks = (int)Math.Ceiling(total / (double)chunkSize);
+
+        for (var chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++)
+        {
+            var start = chunkIndex * chunkSize;
+            var count = Math.Min(chunkSize, total - start);
+
+            var chunkRequest = new ExecuteMultipleRequest
+            {
+                Settings = new ExecuteMultipleSettings
+                {
+                    ContinueOnError = true,
+                    ReturnResponses = true,
+                },
+                Requests = new OrganizationRequestCollection(),
+            };
+
+            for (var i = 0; i < count; i++)
+            {
+                chunkRequest.Requests.Add(requests[start + i]);
+            }
+
+            var chunkSw = Stopwatch.StartNew();
+            try
+            {
+                await RetryWithBackoffAsync(
+                    async () =>
+                    {
+                        await _dataverseService.ExecuteAsync(chunkRequest);
+                        return true;
+                    },
+                    $"{operationName} chunk {chunkIndex + 1}/{totalChunks}",
+                    maxRetries,
+                    baseDelayMs,
+                    correlationId);
+
+                chunkSw.Stop();
+                succeededChunks++;
+
+                _logger.LogInformation(
+                    "ExecuteMultiple chunk succeeded. Operation={Operation} Chunk={Chunk}/{Total} Count={Count} ElapsedMs={Elapsed} CorrelationId={CorrelationId}",
+                    operationName, chunkIndex + 1, totalChunks, count, chunkSw.ElapsedMilliseconds, correlationId);
+            }
+            catch (Exception ex)
+            {
+                chunkSw.Stop();
+                failedChunks++;
+                var errMsg = $"Chunk {chunkIndex + 1}/{totalChunks} failed after {maxRetries} retries: {ex.Message}";
+                errors.Add(errMsg);
+
+                _logger.LogError(
+                    ex,
+                    "ExecuteMultiple chunk failed. Operation={Operation} Chunk={Chunk}/{Total} Count={Count} ElapsedMs={Elapsed} CorrelationId={CorrelationId}",
+                    operationName, chunkIndex + 1, totalChunks, count, chunkSw.ElapsedMilliseconds, correlationId);
+            }
+        }
+
+        return (succeededChunks, failedChunks, errors);
+    }
+
     private static OrganizationRequest UpsertRequest(Guid guid)
     {
         ParameterCollection parameters = new ParameterCollection
