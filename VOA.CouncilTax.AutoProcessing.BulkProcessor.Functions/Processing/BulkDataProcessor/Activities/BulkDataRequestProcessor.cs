@@ -450,10 +450,10 @@ public sealed class BulkDataRequestProcessor
 
     // Chunk size and retry configuration with safe defaults.
     // See README.md for documentation on these environment variables.
-    var executeMultipleChunkSize = GetChunkSizeFlag("BulkSaveItemsExecuteMultipleChunkSize", defaultValue: 100, min: 1, max: 1000);
-    var itemUpsertChunkSize = GetChunkSizeFlag("BulkSaveItemsItemUpsertChunkSize", defaultValue: 100, min: 1, max: 1000);
-    var chunkMaxRetries = GetChunkSizeFlag("BulkSaveItemsMaxRetries", defaultValue: 3, min: 0, max: 10);
-    var chunkBaseDelayMs = GetChunkSizeFlag("BulkSaveItemsBaseDelayMs", defaultValue: 500, min: 50, max: 30000);
+    var executeMultipleChunkSize = GetIntConfigValue("BulkSaveItemsExecuteMultipleChunkSize", defaultValue: 100, min: 1, max: 1000);
+    var itemUpsertChunkSize = GetIntConfigValue("BulkSaveItemsItemUpsertChunkSize", defaultValue: 100, min: 1, max: 1000);
+    var chunkMaxRetries = GetIntConfigValue("BulkSaveItemsMaxRetries", defaultValue: 3, min: 0, max: 10);
+    var chunkBaseDelayMs = GetIntConfigValue("BulkSaveItemsBaseDelayMs", defaultValue: 500, min: 50, max: 30000);
 
     var pendingStatusValue = new OptionSetValue(Constants.StatusCodes.Pending);
 
@@ -1273,7 +1273,7 @@ public sealed class BulkDataRequestProcessor
     /// Reads an integer environment variable and clamps it to [min, max].
     /// Logs a warning and returns <paramref name="defaultValue"/> when the value is absent, unparseable, or out of range.
     /// </summary>
-    private int GetChunkSizeFlag(string key, int defaultValue, int min = 1, int max = 1000)
+    private int GetIntConfigValue(string key, int defaultValue, int min = 1, int max = 1000)
     {
         var raw = Environment.GetEnvironmentVariable(key);
         if (raw is null)
