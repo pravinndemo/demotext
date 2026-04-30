@@ -50,7 +50,7 @@ public static class BulkDataRouteDecisionBuilder
             {
                 Accepted = true,
                 RouteMode = "BULK_SELECTION",
-                SsuIds = request.SsuIds.Select(item => item.StatutorySpatialUnitId.ToString()).ToList(),
+                SsuIds = request.SsuIds!.Select(item => item.StatutorySpatialUnitId.ToString()).ToList(),
             };
         }
 

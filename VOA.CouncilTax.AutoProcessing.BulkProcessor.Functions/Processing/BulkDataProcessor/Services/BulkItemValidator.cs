@@ -167,7 +167,7 @@ public sealed class BulkItemValidator
                 // Build update request
                 var updateEntity = new Entity(bulkIngestionItemEntityName, itemId)
                 {
-                    [validationStatusColumnName] = new OptionSetValue(validationStatus),
+                    [validationStatusColumnName] = validationStatus,
                     [validationMessageColumnName] = validationMessage,
                     [isDuplicateColumnName] = isDuplicate,
                 };

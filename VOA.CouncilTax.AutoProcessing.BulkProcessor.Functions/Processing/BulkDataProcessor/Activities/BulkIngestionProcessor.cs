@@ -1073,6 +1073,9 @@ public class BulkIngestionProcessor
     {
         var entity = new Entity("voa_bulkingestion", id);
         entity["statuscode"] = new OptionSetValue(status);
+        entity["statecode"] = new OptionSetValue(status is StatusCodes.Completed or StatusCodes.Failed
+            ? EntityFields.StateCode.Inactive
+            : EntityFields.StateCode.Active);
 
         await RetryAsync(async () =>
         {
