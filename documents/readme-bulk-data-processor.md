@@ -25,7 +25,7 @@ So we split responsibilities:
 - `BulkDataRequestProcessor`:
   - request validation and orchestration
   - status gate checks
-  - action-specific flow (`SaveItems`, `SubmitBatch`, `SVT_SINGLE`)
+  - action-specific flow (`SaveItems`, `SubmitBatch`, `SVT_TRACKING`)
 - `BulkDataRouteDecisionBuilder`:
   - payload-shape routing only
 
@@ -46,7 +46,7 @@ Intent mapping:
 - `submit-batch`:
   - final submit of a `Draft` batch, create requests for valid items, then move to `Queued`
 - `svt-single`:
-  - direct single-item request path outside bulk batch staging
+  - tracking-row dispatch outside bulk batch staging
 
 ## Current behavior in processor
 
@@ -58,14 +58,14 @@ The processor currently does these steps:
 
 2. Determine route mode by payload shape
 - Uses `BulkDataRouteDecisionBuilder`
-- Modes: `BULK_SELECTION`, `BULK_FILE`, `SVT_SINGLE`
+- Modes: `BULK_SELECTION`, `BULK_FILE`, `SVT_TRACKING`
 
 3. Validate endpoint vs route mode
 - SVT endpoint accepts only SVT payload
 - Bulk endpoints reject SVT payload
 
 4. SVT path
-- Creates a request immediately and, when applicable, creates the incident directly in the Azure Function
+- Loads the SVT tracking row and creates the request/job for tracking payloads
 
 5. Bulk path
 - Requires `bulkProcessorId`

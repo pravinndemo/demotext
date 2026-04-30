@@ -22,6 +22,8 @@ public sealed class BulkDataRouteDecisionResponse
 
     public Guid? JobId { get; set; }
 
+    public Guid? SvtProcessingId { get; set; }
+
     public List<string>? SsuIds { get; set; }
 
     public string? SsuId { get; set; }
@@ -31,6 +33,12 @@ public sealed class BulkDataRouteDecisionResponse
     public string? ComponentName { get; set; }
 
     public string? RouteMode { get; set; }
+
+    public string? DispatchState { get; set; }
+
+    public string? Status { get; set; }
+
+    public int? AttemptCount { get; set; }
 
     public string? StatusReason { get; set; }
 

@@ -21,7 +21,7 @@ internal sealed class DirectJobCreationService
     public Guid CreateJobForRequest(Guid requestId, RequestJobCreateItem item, Guid userId, string componentName)
 {
     var requestEntityName = Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
-    var requestLookupColumnName = Environment.GetEnvironmentVariable("JobParentRequestLookupColumnName") ?? ConfigurationValues.ParentRequest;
+    var requestLookupColumnName = Environment.GetEnvironmentVariable("JobParentRequestLookupColumnName") ?? ConfigurationValues.parentRequest;
     var jobTypeColumnName = Environment.GetEnvironmentVariable("JobTypeColumnName") ?? ConfigurationValues.JobType;
     var requestTypeColumnName = Environment.GetEnvironmentVariable("JobRequestTypeLookupColumnName") ?? "voa_requesttypeid";
     var targetDateColumnName = Environment.GetEnvironmentVariable("JobTargetDateColumnName") ?? "voa_targetdate";
@@ -197,6 +197,28 @@ internal sealed class DirectJobCreationService
 
     return jobId;
 }
+
+    public async Task<Guid?> TryGetExistingJobIdForRequestAsync(Guid requestId)
+    {
+        var requestLookupColumnName = Environment.GetEnvironmentVariable("JobParentRequestLookupColumnName") ?? ConfigurationValues.parentRequest;
+        var jobEntityName = Environment.GetEnvironmentVariable("SvtJobEntityLogicalName") ?? ConfigurationValues.IncidentEntityName;
+
+        var query = new QueryExpression(jobEntityName)
+        {
+            ColumnSet = new ColumnSet(false),
+            PageInfo = new PagingInfo { PageNumber = 1, Count = 1 },
+            Criteria = new FilterExpression
+            {
+                Conditions =
+                {
+                    new ConditionExpression(requestLookupColumnName, ConditionOperator.Equal, requestId),
+                }
+            }
+        };
+
+        var result = await _dataverseService.RetrieveMultipleAsync(query);
+        return result.Entities.FirstOrDefault()?.Id;
+    }
 
     private EntityReference ResolveCustomerReference(Entity request, string ratepayerColumnName, string submittedByColumnName)
     {

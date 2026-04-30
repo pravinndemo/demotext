@@ -30,7 +30,6 @@ public class BulkIngestionProcessor
     private const int BaseDelayMs = 500;
     private const string ItemEntityName = "voa_bulkingestionitem";
     private const string ItemParentLookupColumn = "voa_parentbulkingestion";
-    private const string ItemValidationStatusColumn = "voa_validationstatus";
     private const string ItemValidationFailureReasonColumn = "voa_validationfailurereason";
     private const string ItemProcessingStageColumn = "voa_processingstage";
     private const string ItemProcessingTimestampColumn = "voa_processingtimestamp";
@@ -40,6 +39,8 @@ public class BulkIngestionProcessor
     private const string ItemSsuIdColumn = "voa_hereditament";
     private const string ItemRequestLookupColumn = "voa_requestlookup";
     private const string ItemJobLookupColumn = "voa_joblookup";
+    private static string ItemValidationStatusColumn =>
+        Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName") ?? "voa_validationstatus";
 
     public BulkIngestionProcessor(
         IHttpClientFactory httpClientFactory,
@@ -55,6 +56,7 @@ public class BulkIngestionProcessor
     {
         var runSw = Stopwatch.StartNew();
         var processingRunId = Guid.NewGuid().ToString("N");
+        // Only parent batches in Queued or PartialSuccess are eligible for timer pickup.
         List<Entity> submittedIngestions = await RetrieveSubmittedIngestionsAsync();
 
         if (!submittedIngestions.Any())
@@ -80,7 +82,6 @@ public class BulkIngestionProcessor
                     errorSummary: null);
 
                 await ProcessSingleIngestionAsync(ingestion, processingRunId);
-
                 await TryUpdateIngestionProcessingStateAsync(
                     ingestion.Id,
                     processingStatusValue: StatusCodes.ProcessingStatusProcessed,
@@ -92,6 +93,11 @@ public class BulkIngestionProcessor
             }
             catch (Exception ex)
             {
+                var finalCounts = await RefreshIngestionCountersAsync(ingestion.Id, processingRunId);
+                var finalStatus = await DetermineFinalIngestionStatusAsync(ingestion.Id, null, finalCounts);
+
+                await UpdateIngestionStatusAsync(ingestion.Id, finalStatus);
+
                 await TryUpdateIngestionProcessingStateAsync(
                     ingestion.Id,
                     processingStatusValue: StatusCodes.ProcessingStatusFailed,
@@ -119,14 +125,14 @@ public class BulkIngestionProcessor
         var ingestionSw = Stopwatch.StartNew();
         _logger.LogInformation("Processing Bulk Ingestion [{Id}] ProcessingRunId={ProcessingRunId}", ingestion.Id, processingRunId);
 
-        // Note: Status remains Queued (358800003) until processing completes and final state is set
-        // await UpdateIngestionStatusAsync(ingestion.Id, StatusCodes.Processing);
+        // The parent batch stays in its queue-facing status until all child items finish and final status is computed.
 
         List<Entity> validItems = await RetrieveValidItemsAsync(ingestion.Id);
 
         if (!validItems.Any())
         {
-            var existingStatus = await DetermineFinalStatusFromExistingItemsAsync(ingestion.Id);
+            var existingCounts = await RefreshIngestionCountersAsync(ingestion.Id, processingRunId);
+            var existingStatus = await DetermineFinalIngestionStatusAsync(ingestion.Id, null, existingCounts);
             _logger.LogInformation(
                 "BulkIngestion [{Id}] has no valid items. Finalising from existing item statuses with status {Status}.",
                 ingestion.Id,
@@ -184,21 +190,74 @@ public class BulkIngestionProcessor
             }
         }
 
-        await FinaliseIngestionAsync(ingestionResult);
-
         ingestionSw.Stop();
-        var finalStatus = await DetermineFinalIngestionStatusAsync(ingestionResult);
+        var finalCounts = await RefreshIngestionCountersAsync(ingestion.Id, processingRunId);
+        var finalStatus = await DetermineFinalIngestionStatusAsync(ingestion.Id, ingestionResult, finalCounts);
+        await UpdateIngestionStatusAsync(ingestion.Id, finalStatus);
         var batchCount = (int)Math.Ceiling(validItems.Count / (double)batchSize);
         _logger.LogInformation(
-            "Performance.TimerIngestionSummary ProcessingRunId={ProcessingRunId} IngestionId={IngestionId} ValidItems={ValidItems} SuccessCount={SuccessCount} FailureCount={FailureCount} Batches={BatchCount} FinalStatus={FinalStatus} TotalElapsedMs={TotalElapsedMs}",
+            "Performance.TimerIngestionSummary ProcessingRunId={ProcessingRunId} IngestionId={IngestionId} ValidItems={ValidItems} SuccessCount={SuccessCount} FailureCount={FailureCount} TotalRows={TotalRows} ValidCount={ValidCount} InvalidCount={InvalidCount} DuplicateCount={DuplicateCount} ProcessedCount={ProcessedCount} FailedCount={FailedCount} Batches={BatchCount} FinalStatus={FinalStatus} TotalElapsedMs={TotalElapsedMs}",
             processingRunId,
             ingestion.Id,
             validItems.Count,
             ingestionResult.SuccessCount,
             ingestionResult.FailureCount,
+            finalCounts?.TotalRows ?? 0,
+            finalCounts?.ValidItemCount ?? 0,
+            finalCounts?.InvalidItemCount ?? 0,
+            finalCounts?.DuplicateItemCount ?? 0,
+            finalCounts?.ProcessedItemCount ?? 0,
+            finalCounts?.FailedItemCount ?? 0,
             batchCount,
             finalStatus,
             ingestionSw.ElapsedMilliseconds);
+    }
+
+    private async Task<BulkItemCounts?> RefreshIngestionCountersAsync(Guid ingestionId, string processingRunId)
+    {
+        try
+        {
+            // Recalculate from Dataverse each pass so the parent reflects whatever was actually processed or left behind.
+            var query = new QueryExpression(ItemEntityName)
+            {
+                ColumnSet = new ColumnSet(ItemValidationStatusColumn, "voa_isduplicate"),
+                Criteria = new FilterExpression
+                {
+                    Conditions =
+                    {
+                        new ConditionExpression(ItemParentLookupColumn, ConditionOperator.Equal, ingestionId),
+                    }
+                }
+            };
+
+            var allItems = await _crmService.RetrieveMultipleAsync(query);
+            var counts = CalculateItemCounts(allItems);
+
+            var writer = new DataverseBulkItemWriter(_crmService);
+            writer.UpdateBatchCounters(ingestionId, counts);
+
+            _logger.LogInformation(
+                "Performance.TimerCounterRefresh ProcessingRunId={ProcessingRunId} IngestionId={IngestionId} TotalRows={TotalRows} ValidItems={ValidItems} InvalidItems={InvalidItems} DuplicateItems={DuplicateItems} ProcessedItems={ProcessedItems} FailedItems={FailedItems}",
+                processingRunId,
+                ingestionId,
+                counts.TotalRows,
+                counts.ValidItemCount,
+                counts.InvalidItemCount,
+                counts.DuplicateItemCount,
+                counts.ProcessedItemCount,
+                counts.FailedItemCount);
+
+            return counts;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not refresh batch counters for ingestion {IngestionId}. ProcessingRunId={ProcessingRunId}",
+                ingestionId,
+                processingRunId);
+            return null;
+        }
     }
 
     private async Task<List<ItemProcessingResult>> ProcessBatchWithRequestJobCreationAsync(
@@ -793,37 +852,45 @@ public class BulkIngestionProcessor
         }
     }
 
-    private async Task FinaliseIngestionAsync(IngestionProcessingResult result)
+    private async Task<int> DetermineFinalIngestionStatusAsync(
+        Guid ingestionId,
+        IngestionProcessingResult? result,
+        BulkItemCounts? counts)
     {
-        var status = await DetermineFinalIngestionStatusAsync(result);
-
-        var parent = new Entity("voa_bulkingestion", result.IngestionId);
-        parent["statuscode"] = new OptionSetValue(status);
-
-        await RetryAsync(async () =>
+        if (counts is null)
         {
-            await _crmService.UpdateAsync(parent);
-            return true;
-        }, $"Finalise {result.IngestionId}", MaxRetries);
-
-        _logger.LogInformation($"Completed Ingestion {result.IngestionId}");
-    }
-
-    private async Task<int> DetermineFinalIngestionStatusAsync(IngestionProcessingResult result)
-    {
-        if (result.FailureCount == 0)
-        {
-            return StatusCodes.Completed;
+            return result is null
+                ? StatusCodes.Failed
+                : await DetermineFinalStatusFromExistingItemsAsync(ingestionId);
         }
 
-        if (await HasReprocessableFailuresAsync(result.IngestionId))
+        var hasRemainingValidItems = counts.ValidItemCount > 0;
+
+        // Retryable failures keep the batch in Delayed so the operator can decide whether to re-run it.
+        if (counts.ProcessedItemCount == 0)
+        {
+            if (await HasReprocessableFailuresAsync(ingestionId))
+            {
+                return StatusCodes.Delayed;
+            }
+
+            return hasRemainingValidItems || counts.InvalidItemCount > 0 || counts.DuplicateItemCount > 0 || counts.FailedItemCount > 0
+                ? StatusCodes.Failed
+                : StatusCodes.Completed;
+        }
+
+        if (await HasReprocessableFailuresAsync(ingestionId))
         {
             return StatusCodes.Delayed;
         }
 
-        return result.SuccessCount == 0
-            ? StatusCodes.Failed
-            : StatusCodes.PartialSuccess;
+        // Any leftover Valid, Invalid, Duplicate, or Failed rows means the batch is not fully complete yet.
+        if (hasRemainingValidItems || counts.InvalidItemCount > 0 || counts.DuplicateItemCount > 0 || counts.FailedItemCount > 0)
+        {
+            return StatusCodes.PartialSuccess;
+        }
+
+        return StatusCodes.Completed;
     }
 
     private async Task<bool> HasReprocessableFailuresAsync(Guid ingestionId)
@@ -854,7 +921,10 @@ public class BulkIngestionProcessor
             ColumnSet = new ColumnSet("statuscode", "ownerid", "createdby", "voa_processingjobtype", "voa_template")
         };
 
+        // The timer is re-entrant: it continues batches that are still queued or partially complete.
+        query.Criteria.FilterOperator = LogicalOperator.Or;
         query.Criteria.AddCondition("statuscode", ConditionOperator.Equal, StatusCodes.Queued);
+        query.Criteria.AddCondition("statuscode", ConditionOperator.Equal, StatusCodes.PartialSuccess);
 
         var result = await _crmService.RetrieveMultipleAsync(query);
         return result.Entities.ToList();
@@ -862,6 +932,7 @@ public class BulkIngestionProcessor
 
     private bool ShouldCreateRequestJobsInTimer()
     {
+        // Current mode keeps bulk request/job creation on the timer path for queued batches.
         return true;
     }
 
@@ -990,6 +1061,7 @@ public class BulkIngestionProcessor
             ColumnSet = new ColumnSet(true)
         };
 
+        // Each timer pass only consumes rows that are still marked Valid.
         query.Criteria.AddCondition(ItemParentLookupColumn, ConditionOperator.Equal, ingestionId);
         query.Criteria.AddCondition(ItemValidationStatusColumn, ConditionOperator.Equal, StatusCodes.Valid);
 
@@ -1139,6 +1211,24 @@ public class BulkIngestionProcessor
         }
 
         return false;
+    }
+
+    private static BulkItemCounts CalculateItemCounts(EntityCollection items)
+    {
+        return new BulkItemCounts
+        {
+            TotalRows = items.Entities.Count,
+            ValidItemCount = items.Entities.Count(e =>
+                e.GetAttributeValue<OptionSetValue>(ItemValidationStatusColumn)?.Value == StatusCodes.Valid),
+            InvalidItemCount = items.Entities.Count(e =>
+                e.GetAttributeValue<OptionSetValue>(ItemValidationStatusColumn)?.Value == StatusCodes.Invalid),
+            DuplicateItemCount = items.Entities.Count(e =>
+                e.GetAttributeValue<bool?>("voa_isduplicate") ?? false),
+            ProcessedItemCount = items.Entities.Count(e =>
+                e.GetAttributeValue<OptionSetValue>(ItemValidationStatusColumn)?.Value == StatusCodes.Processed),
+            FailedItemCount = items.Entities.Count(e =>
+                e.GetAttributeValue<OptionSetValue>(ItemValidationStatusColumn)?.Value == StatusCodes.ItemFailed),
+        };
     }
 
     private sealed record TemplateProcessingSettings(Guid? JobTypeId, bool CreateJob, bool FromTemplate, string? FormatLabel, int? FormatCode);

@@ -26,17 +26,17 @@ Sequence:
 Route builder outcomes:
 - `BULK_SELECTION`: `bulkProcessorId` + `ssuIds[]`
 - `BULK_FILE`: `bulkProcessorId` only
-- `SVT_SINGLE`: `ssuid` + `userId` + `componentName`
+- `SVT_TRACKING`: `svtProcessingId`
 - Rejections:
   - Mixed bulk and SVT fields -> `INVALID_COMBINATION`
-  - Incomplete SVT payload -> `INVALID_SVT_REQUEST`
+  - Missing SVT tracking id -> `INVALID_SVT_REQUEST`
   - Missing `bulkProcessorId` with `ssuIds` -> `BULK_PROCESSOR_ID_REQUIRED`
 
 Endpoint guard outcomes:
 - SVT endpoint with non-SVT payload -> `INVALID_ROUTE_FOR_ENDPOINT`
 - Bulk endpoints with SVT payload -> `INVALID_ROUTE_FOR_ENDPOINT`
 
-## 3. SVT Single Flow
+## 3. SVT Tracking Flow
 
 The target SVT flow uses a separate tracking table and does not reuse the bulk tables.
 
@@ -51,15 +51,14 @@ Recommended model:
 - Azure Function updates the SVT row to `Completed`.
 - PCF polls the tracking row and refreshes the screen.
 
-When route mode is `SVT_SINGLE` in the HTTP-triggered path:
-1. Validate the incoming SVT request shape.
+When route mode is `SVT_TRACKING` in the HTTP-triggered path:
+1. Validate the incoming SVT tracking request shape.
 2. Confirm the tracking row is eligible for dispatch.
 3. Create or update the request/job records.
 4. Persist status and output fields back to the SVT tracking row.
 
 Success response:
-- `Action = SvtSingle`
-- `StagingStatus = Completed`
+- `Action = SvtTracking`
 - `ReceivedCount = 1`
 - Message includes `RequestId`, `JobId`, and the final SVT status
 
@@ -230,7 +229,7 @@ So for HTTP flow: partial failure handling exists, but no centralized retry loop
 SVT tracking row and dispatch validation:
 
 1. `correlationId` is required and should be unique.
-2. `ssuid`, `userId`, and `componentName` are required for SVT dispatch.
+2. `svtProcessingId` is required for SVT dispatch.
 3. `voa_dispatchstate` must be set to `Requested` or `ReRequested` to trigger processing.
 4. `voa_status` must not already be `Processing` or `Completed` when dispatch starts.
 5. `voa_requestid` and `voa_jobid` are system-managed output fields.

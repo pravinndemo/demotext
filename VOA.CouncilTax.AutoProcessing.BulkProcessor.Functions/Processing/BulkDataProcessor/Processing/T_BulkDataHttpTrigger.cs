@@ -22,6 +22,7 @@ public class T_BulkDataHttpTrigger
     public Task<IActionResult> RunSaveItems(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "bulk-data/save-items")] HttpRequest req)
     {
+        // SaveItems updates staged items and recalculates counters; it does not move the batch out of Draft.
         return _requestProcessor.ProcessRequest(req, BulkRequestAction.SaveItems, svtOnly: false);
     }
 
@@ -29,6 +30,7 @@ public class T_BulkDataHttpTrigger
     public Task<IActionResult> RunSubmitBatch(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "bulk-data/submit-batch")] HttpRequest req)
     {
+        // SubmitBatch performs the final handoff from Draft to Queued.
         return _requestProcessor.ProcessRequest(req, BulkRequestAction.SubmitBatch, svtOnly: false);
     }
 
@@ -36,6 +38,7 @@ public class T_BulkDataHttpTrigger
     public Task<IActionResult> RunSvtSingle(
         [HttpTrigger(AuthorizationLevel.Function, "post", Route = "bulk-data/svt-single")] HttpRequest req)
     {
+        // SVT uses the tracking-row flow only; legacy direct SVT payloads are no longer accepted here.
         return _requestProcessor.ProcessRequest(req, bulkAction: null, svtOnly: true);
     }
 

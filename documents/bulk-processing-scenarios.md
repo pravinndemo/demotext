@@ -34,7 +34,7 @@ Rules already agreed:
 |---|---|---|---|
 | Save items in Draft | `POST /bulk-data/save-items` | PCF selection save or CSV save via Custom API | Keeps batch in `Draft` |
 | Final submit to queue and create work | `POST /bulk-data/submit-batch` | Final manual submit via Custom API | Moves `Draft -> Queued`, creates requests for valid items, and creates incidents directly when applicable |
-| SVT single | `POST /bulk-data/svt-single` | SVT caller via Custom API | Bypasses bulk batch item flow |
+| SVT tracking | `POST /bulk-data/svt-single` | SVT caller via Custom API | Uses the SVT tracking row and bypasses bulk batch item flow |
 
 These are the only supported routes for this first-time implementation.
 

@@ -20,7 +20,7 @@ File: `Processing/BulkDataProcessor/Processing/T_BulkDataHttpTrigger.cs`
 ### 1.3 `POST /bulk-data/svt-single`
 - Function: `T_SvtSingleHttpTrigger`
 - Routed as SVT-only flow.
-- Purpose: direct single-item request/job creation.
+- Purpose: tracking-row dispatch when the payload carries `svtProcessingId`.
 
 ### 1.4 SVT tracking model
 Target design uses a separate SVT tracking table instead of bulk staging tables:
@@ -51,6 +51,7 @@ Fields:
 - `ssuId?: string` (SVT mode)
 - `userId?: string` (SVT or submit user resolution)
 - `componentName?: string` (SVT metadata)
+- `svtProcessingId?: Guid` (SVT tracking-row dispatch)
 - `fileColumnName?: string` (defaults to `voa_sourcefile`)
 - `requestedBy?: string` (submit user fallback)
 - `correlationId?: string`
@@ -60,16 +61,14 @@ Fields:
 Resolved by `BulkDataRouteDecisionBuilder`:
 - `BULK_SELECTION`: `bulkProcessorId + ssuIds[]`
 - `BULK_FILE`: `bulkProcessorId` only
-- `SVT_SINGLE`: `ssuId + userId + componentName`
+- `SVT_TRACKING`: `svtProcessingId`
 
 Invalid combinations are rejected with error `Code`.
 
 SVT tracking rows should also reject:
 
 - missing or duplicate `correlationId`
-- missing `ssuid`
-- missing `userId`
-- missing `componentName`
+- missing `svtProcessingId`
 - repeated dispatch when `voa_status` is already `Processing` or `Completed`
 
 ## 4. Response Contract

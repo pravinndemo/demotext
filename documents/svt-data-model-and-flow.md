@@ -124,29 +124,39 @@ If an error occurs:
 - Azure Function stores `voa_errorcode` and `voa_errormessage`
 - `voa_isretryable` reflects whether the user can retry
 
-## 6. Patterns To Follow
+## 6. Code Surface
 
-### 6.1 Keep the plug-in thin
+The current implementation adds the following SVT-specific code paths:
+
+- Azure Function route: `POST /bulk-data/svt-single`
+- Azure Function processor branch: `SVT_TRACKING` inside `BulkDataRequestProcessor`
+- Dataverse tracking service: `SvtProcessingTrackingService`
+- Dataverse plug-in: `SvtDispatchPlugin`
+
+The same `POST /bulk-data/svt-single` route now supports the tracking-row flow when the payload contains `svtProcessingId`.
+
+## 7. Patterns To Follow
+
+### 7.1 Keep the plug-in thin
 
 - validate the dispatch state
 - call Azure Function
 - do not put request/job business logic in the plug-in
 
-### 6.2 Keep the function idempotent
+### 7.2 Keep the function idempotent
 
 - use `voa_correlationid` as the primary deduplication key
 - check the SVT row before creating request/job
 - treat repeated calls as normal, not exceptional
 
-### 6.3 Keep UI polling simple
+### 7.3 Keep UI polling simple
 
 - PCF should display the live status from `voa_status`
 - PCF should show `voa_requestid` and `voa_jobid` when available
 - PCF should provide a refresh/retry button for failed rows
 
-### 6.4 Keep bulk and SVT separate
+### 7.4 Keep bulk and SVT separate
 
 - bulk uses `voa_bulkingestion` and `voa_bulkingestionitem`
 - SVT uses `voa_svtprocessing`
 - do not merge these flows unless the business process becomes batch-based
-

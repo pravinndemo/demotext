@@ -8,11 +8,11 @@ public static class BulkDataRouteDecisionBuilder
     {
         var hasBulkProcessorId = request.BulkProcessorId != Guid.Empty;
         var hasSsuIds = request.SsuIds is { Count: > 0 };
-        var hasSingleSsuId = !string.IsNullOrWhiteSpace(request.SsuId);
-        var hasUserId = !string.IsNullOrWhiteSpace(request.UserId);
-        var hasComponentName = !string.IsNullOrWhiteSpace(request.ComponentName);
-
-        var hasAnySvtField = hasSingleSsuId || hasUserId || hasComponentName;
+        var hasSvtProcessingId = request.SvtProcessingId.HasValue && request.SvtProcessingId.Value != Guid.Empty;
+        var hasLegacySvtField = !string.IsNullOrWhiteSpace(request.SsuId)
+            || !string.IsNullOrWhiteSpace(request.UserId)
+            || !string.IsNullOrWhiteSpace(request.ComponentName);
+        var hasAnySvtField = hasLegacySvtField || hasSvtProcessingId;
 
         if (hasBulkProcessorId && hasAnySvtField)
         {
@@ -20,7 +20,27 @@ public static class BulkDataRouteDecisionBuilder
             {
                 Accepted = false,
                 Code = "INVALID_COMBINATION",
-                Message = "Do not mix bulk fields (bulkProcessorId/ssuIds) with SVT fields (ssuid/userId/componentName).",
+                Message = "Do not mix bulk fields (bulkProcessorId/ssuIds) with SVT fields (ssuid/userId/componentName/svtProcessingId).",
+            };
+        }
+
+        if (hasSvtProcessingId)
+        {
+            if (hasLegacySvtField)
+            {
+                return new BulkDataRouteDecisionResponse
+                {
+                    Accepted = false,
+                    Code = "INVALID_COMBINATION",
+                    Message = "SVT tracking dispatch must supply svtProcessingId only.",
+                };
+            }
+
+            return new BulkDataRouteDecisionResponse
+            {
+                Accepted = true,
+                RouteMode = "SVT_TRACKING",
+                SvtProcessingId = request.SvtProcessingId,
             };
         }
 
@@ -30,7 +50,7 @@ public static class BulkDataRouteDecisionBuilder
             {
                 Accepted = true,
                 RouteMode = "BULK_SELECTION",
-                SsuIds = request.SsuIds,
+                SsuIds = request.SsuIds.Select(item => item.StatutorySpatialUnitId.ToString()).ToList(),
             };
         }
 
@@ -45,23 +65,11 @@ public static class BulkDataRouteDecisionBuilder
 
         if (!hasBulkProcessorId && hasAnySvtField)
         {
-            if (!hasSingleSsuId || !hasUserId || !hasComponentName)
-            {
-                return new BulkDataRouteDecisionResponse
-                {
-                    Accepted = false,
-                    Code = "INVALID_SVT_REQUEST",
-                    Message = "SVT mode requires ssuid, userId, and componentName.",
-                };
-            }
-
             return new BulkDataRouteDecisionResponse
             {
-                Accepted = true,
-                RouteMode = "SVT_SINGLE",
-                SsuId = request.SsuId,
-                UserId = request.UserId,
-                ComponentName = request.ComponentName,
+                Accepted = false,
+                Code = "INVALID_SVT_REQUEST",
+                Message = "SVT tracking mode requires svtProcessingId. Legacy direct SVT fields are no longer supported.",
             };
         }
 
@@ -79,7 +87,7 @@ public static class BulkDataRouteDecisionBuilder
         {
             Accepted = false,
             Code = "INVALID_COMBINATION",
-            Message = "Valid combinations are: bulkProcessorId + ssuIds[], bulkProcessorId only, or ssuid + userId + componentName.",
+            Message = "Valid combinations are: bulkProcessorId + ssuIds[], bulkProcessorId only, or svtProcessingId.",
         };
     }
 }
