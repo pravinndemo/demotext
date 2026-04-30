@@ -118,7 +118,7 @@ var requestStatusColumnName =
                 ?? Environment.GetEnvironmentVariable("SvtDefaultRequestType")
                 ?? "Data Enhancement";
 
-            resolvedJobTypeId = await GetCodedReasonIdAsync("voa_codereason", "voa_Value", jobTypeName);
+            resolvedJobTypeId = EntityFields.JobType.DataEnhancement; // Default to known Job Type if not provided and cannot resolve by name
             if (resolvedJobTypeId == Guid.Empty)
             {
                 return new RequestJobBatchResult

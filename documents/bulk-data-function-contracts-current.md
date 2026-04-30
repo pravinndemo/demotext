@@ -22,6 +22,24 @@ File: `Processing/BulkDataProcessor/Processing/T_BulkDataHttpTrigger.cs`
 - Routed as SVT-only flow.
 - Purpose: direct single-item request/job creation.
 
+### 1.4 SVT tracking model
+Target design uses a separate SVT tracking table instead of bulk staging tables:
+
+- table: `voa_svtprocessing`
+- trigger field: `voa_dispatchstate`
+- lifecycle field: `voa_status`
+- output fields: `voa_requestid`, `voa_jobid`, `voa_errormessage`
+
+The intended flow is:
+
+1. PCF updates the SVT tracking row and sets dispatch state to `Requested`.
+2. Async plug-in calls Azure Function.
+3. Azure Function creates the request.
+4. Azure Function updates the SVT row with `requestId` and `RequestCreated`.
+5. Azure Function creates the job.
+6. Azure Function updates the SVT row with `jobId` and `Completed`.
+7. PCF polls the SVT row until it reaches `Completed` or `Failed`.
+
 ## 2. Request Contract
 
 Model: `BulkDataRouteDecisionRequest`
@@ -45,6 +63,14 @@ Resolved by `BulkDataRouteDecisionBuilder`:
 - `SVT_SINGLE`: `ssuId + userId + componentName`
 
 Invalid combinations are rejected with error `Code`.
+
+SVT tracking rows should also reject:
+
+- missing or duplicate `correlationId`
+- missing `ssuid`
+- missing `userId`
+- missing `componentName`
+- repeated dispatch when `voa_status` is already `Processing` or `Completed`
 
 ## 4. Response Contract
 
@@ -94,6 +120,11 @@ Behavior:
 - Processes valid items in batches.
 - Applies retry policy and per-item state tracking.
 - Finalizes ingestion to `Completed`, `Delayed`, `PartialSuccess`, or `Failed`.
+
+Note:
+
+- SVT should not be routed through the bulk timer in the target design.
+- SVT uses the separate tracking row and async plug-in handoff described above.
 
 ## 7. Retry and Processing-State Contract (Timer)
 

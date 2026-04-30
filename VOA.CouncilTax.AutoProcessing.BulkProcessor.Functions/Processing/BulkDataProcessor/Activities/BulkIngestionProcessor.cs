@@ -72,11 +72,33 @@ public class BulkIngestionProcessor
         {
             try
             {
+                await TryUpdateIngestionProcessingStateAsync(
+                    ingestion.Id,
+                    processingStatusValue: StatusCodes.ProcessingStatusProcessing,
+                    processingStartedOn: DateTime.UtcNow,
+                    processedOn: null,
+                    errorSummary: null);
+
                 await ProcessSingleIngestionAsync(ingestion, processingRunId);
+
+                await TryUpdateIngestionProcessingStateAsync(
+                    ingestion.Id,
+                    processingStatusValue: StatusCodes.ProcessingStatusProcessed,
+                    processingStartedOn: null,
+                    processedOn: DateTime.UtcNow,
+                    errorSummary: null);
+
                 processedIngestions++;
             }
             catch (Exception ex)
             {
+                await TryUpdateIngestionProcessingStateAsync(
+                    ingestion.Id,
+                    processingStatusValue: StatusCodes.ProcessingStatusFailed,
+                    processingStartedOn: null,
+                    processedOn: DateTime.UtcNow,
+                    errorSummary: ex.Message);
+
                 _logger.LogError(ex, "Unhandled error processing BulkIngestion [{Id}]", ingestion.Id);
                 failedIngestions++;
             }
@@ -985,6 +1007,44 @@ public class BulkIngestionProcessor
             await _crmService.UpdateAsync(entity);
             return true;
         }, $"UpdateStatus {id}", MaxRetries);
+    }
+
+    private async Task TryUpdateIngestionProcessingStateAsync(
+        Guid ingestionId,
+        int? processingStatusValue,
+        DateTime? processingStartedOn,
+        DateTime? processedOn,
+        string? errorSummary)
+    {
+        try
+        {
+            var entity = new Entity("voa_bulkingestion", ingestionId);
+            entity["voa_processingstatus"] = processingStatusValue.HasValue
+                ? new OptionSetValue(processingStatusValue.Value)
+                : null;
+
+            if (processingStartedOn.HasValue)
+            {
+                entity["voa_processingstartedon"] = processingStartedOn.Value;
+            }
+
+            if (processedOn.HasValue)
+            {
+                entity["voa_processedon"] = processedOn.Value;
+            }
+
+            entity["voa_errorsummary"] = errorSummary;
+
+            await RetryAsync(async () =>
+            {
+                await _crmService.UpdateAsync(entity);
+                return true;
+            }, $"UpdateProcessingState {ingestionId}", MaxRetries);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not update processing state for ingestion {IngestionId}", ingestionId);
+        }
     }
 
     private async Task TryMarkItemAsFailedAsync(Guid itemId, int stageCode, string errorMessage, bool canReprocess)

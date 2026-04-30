@@ -6,7 +6,7 @@ This page explains how I want the HTTP-triggered Azure Function to behave for al
 
 - Bulk selection from Hereditament PCF
 - Bulk file upload from Hereditament PCF
-- SVT single-item request from SVT PCF (outside bulk)
+- SVT single-item request from SVT PCF (outside bulk) with a separate SVT tracking row
 
 ## Why I am doing this
 
@@ -16,7 +16,7 @@ I still keep shared routing logic based on payload shape within the function imp
 At the same time, I want strict separation in behavior:
 
 - Bulk = staging plus submit-driven request creation
-- SVT = direct single request/job creation flow
+- SVT = direct single request/job creation flow driven by a dedicated tracking row and status polling
 
 ## Components in the call chain
 
@@ -181,10 +181,12 @@ Request carries:
 Expected behavior:
 
 - Validate single SSUID and caller context
-- Bypass bulk tables (`Bulk Ingestion` and `Bulk Ingestion Item`)
+- Use the dedicated SVT tracking row, not the bulk tables
+- Set the tracking row to `Queued` / `Requested`
 - Trigger direct request creation path for one item
 - Persist `componentName` into request metadata for traceability
 - Link the created request and incident directly from the Azure Function
+- Update the tracking row with `requestId`, `jobId`, and final status
 - Return accepted/direct response for single processing
 
 ## Routing matrix
@@ -234,7 +236,8 @@ I want to keep these boundaries stable:
 - HTTP trigger owns contract validation and route selection
 - Bulk staging remains in HTTP flow
 - Bulk final request creation occurs in `SubmitBatch`
-- Bulk and SVT job creation both use direct incident creation inside the Azure Function
+- Bulk job creation uses direct incident creation inside the Azure Function
+- SVT uses a separate tracking row, async plug-in dispatch, and status polling from PCF
 
 ## First implementation step
 
