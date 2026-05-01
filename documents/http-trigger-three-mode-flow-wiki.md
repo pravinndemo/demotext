@@ -235,6 +235,7 @@ I want to keep these boundaries stable:
 - Bulk staging remains in HTTP flow
 - Bulk final request creation occurs in `SubmitBatch`
 - Bulk job creation uses direct incident creation inside the Azure Function
+- Bulk request and job ownership follow the bulk item's assigned team or manager
 - SVT uses a separate tracking row, async plug-in dispatch, and status polling from PCF
 
 ## First implementation step

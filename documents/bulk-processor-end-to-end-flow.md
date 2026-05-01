@@ -23,7 +23,7 @@ In this flow:
 6. Azure Function processes the request, reads the CSV from the Dataverse file column for the CSV path, and creates or updates `Bulk Processor` and `Bulk Processor Item` records in Dataverse in chunks.
 7. The user reviews the staged `Bulk Processor Item` rows and submits the `Bulk Processor` when ready.
 8. The submit path validates the staged items and creates `Request` records for valid rows.
-9. If template `Case Work Mode = Request and Job(s)`, the function creates the request, creates the `Job` directly, and performs a bypassed follow-up update on the request so the existing plugin does not create a duplicate incident. If mode = `Request Only`, the function creates the request in `In Progress` and no job is created.
+9. If template `Case Work Mode = Request and Job(s)`, the function creates the request, creates the `Job` directly, and performs a bypassed follow-up update on the request so the existing plugin does not create a duplicate incident. Request and job ownership follow the bulk item's assigned team or manager. If mode = `Request Only`, the function creates the request in `In Progress` and no job is created.
 10. The function updates the related `Bulk Processor` and `Bulk Processor Item` records in Dataverse and the batch is then completed, partial success, or failed depending on the processing outcome.
 
 ## Request Contracts
@@ -99,7 +99,7 @@ This is the request shape for the file upload path.
 ### 6. Submit processing and optional queued worker
 - The `SubmitBatch` path validates the staged `Bulk Processor Item` rows for processing.
 - The function creates the `Request` records.
-- For `Request and Job(s)`, the Azure Function creates the request and incident directly.
+- For `Request and Job(s)`, the Azure Function creates the request and incident directly, using the bulk item assignee as the owner.
 - For `Request Only`, the request is created without creating an incident.
 - The function updates the `Bulk Processor Item` row with the result.
 - The function rolls the counts and status back up to the parent `Bulk Processor`.
@@ -123,4 +123,4 @@ This is the request shape for the file upload path.
 
 ## Short Version
 
-The user opens the `Bulk Processor` form, fills in the details, and uses the PCF to either select SSU items or upload a CSV file. For selection, the PCF sends `bulkProcessorId + ssuIds` to the Custom API, which forwards it to Azure Function. For CSV upload, the file is stored in Dataverse and the downstream call sends `bulkProcessorId` plus file context to Azure Function. Azure Function stages `Bulk Processor Item` rows in Dataverse, the user submits the `Bulk Processor`, the function creates the `Request` records, and for `Request and Job(s)` mode it also creates the `Job` records directly in the function.
+The user opens the `Bulk Processor` form, fills in the details, and uses the PCF to either select SSU items or upload a CSV file. For selection, the PCF sends `bulkProcessorId + ssuIds` to the Custom API, which forwards it to Azure Function. For CSV upload, the file is stored in Dataverse and the downstream call sends `bulkProcessorId` plus file context to Azure Function. Azure Function stages `Bulk Processor Item` rows in Dataverse, the user submits the `Bulk Processor`, the function creates the `Request` records, and for `Request and Job(s)` mode it also creates the `Job` records directly in the function. In both cases, ownership comes from the bulk assignment on the item, not from the submitter.

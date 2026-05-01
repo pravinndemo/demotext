@@ -95,7 +95,6 @@ Header (`voa_bulkingestion.statuscode`):
 - Draft `358800001`
 - Queued `358800002`
 - Partial Success `358800003`
-- Delayed `358800004`
 - Completed `358800009`
 - Failed `358800012`
 

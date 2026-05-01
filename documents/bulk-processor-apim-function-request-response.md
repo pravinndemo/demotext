@@ -22,7 +22,7 @@ Use Durable Function later only if we add requirements such as:
 2. APIM forwards to Azure Function HTTP endpoint.
 3. Function validates request and stages work in Dataverse.
 4. Function returns immediate response (`202 Accepted` recommended).
-5. `SubmitBatch` can create requests immediately and, for `Request and Job(s)`, create incidents directly in the Azure Function.
+5. `SubmitBatch` can create requests immediately and, for `Request and Job(s)`, create incidents directly in the Azure Function. Request and incident ownership follow the bulk item assignee.
 6. A bypassed follow-up request update is used so the existing plugin does not create duplicate incidents.
 7. If immediate creation is disabled by configuration, queued batches can still be picked up later by a worker flow.
 
@@ -123,6 +123,7 @@ Use `202 Accepted` because file read, parse, and staging happen asynchronously.
 - Validates that at least one valid item exists.
 - Creates `voa_requestlineitem` records for valid items.
 - For `Request and Job(s)`, creates `incident` records directly in the Azure Function and links them back to both request and bulk item.
+- Request and incident ownership are taken from the bulk item's assigned team or manager.
 - Uses a bypassed request update when moving the request to its active status to avoid duplicate plugin execution.
 - For `Request Only`, creates the request in `In Progress` and does not create an incident.
 - Updates item and batch counters/status.

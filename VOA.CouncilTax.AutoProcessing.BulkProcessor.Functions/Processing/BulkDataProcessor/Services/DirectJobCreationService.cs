@@ -18,7 +18,7 @@ internal sealed class DirectJobCreationService
         _logger = logger;
     }
 
-    public Guid CreateJobForRequest(Guid requestId, RequestJobCreateItem item, Guid userId, string componentName)
+    public async Task<Guid> CreateJobForRequest(Guid requestId, RequestJobCreateItem item, Guid userId, string componentName)
 {
     var requestEntityName = Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
     var requestLookupColumnName = Environment.GetEnvironmentVariable("JobParentRequestLookupColumnName") ?? ConfigurationValues.parentRequest;
@@ -113,6 +113,28 @@ internal sealed class DirectJobCreationService
     var ownerRef =
         request.GetAttributeValue<EntityReference>(ConfigurationValues.Owner)
         ?? new EntityReference("systemuser", userId);
+
+    if (ssuRef is not null)
+    {
+        var existingJobId = await TryGetExistingActiveJobIdForSsuAsync(
+            ssuRef.Id,
+            codedReasonRef.Id,
+            ConfigurationValues.IncidentEntityName,
+            jobTypeColumnName);
+
+        if (existingJobId.HasValue)
+        {
+            _logger.LogInformation(
+                "Existing active job found for SSU {SsuId} and coded reason {CodedReasonId}. Reusing JobId={JobId} for RequestId={RequestId}.",
+                ssuRef.Id,
+                codedReasonRef.Id,
+                existingJobId.Value,
+                requestId);
+
+            UpdateRequestAfterDirectJobCreation(requestId, existingJobId.Value);
+            return existingJobId.Value;
+        }
+    }
 
     var customerRef = ResolveCustomerReference(
         request,
@@ -212,6 +234,34 @@ internal sealed class DirectJobCreationService
                 Conditions =
                 {
                     new ConditionExpression(requestLookupColumnName, ConditionOperator.Equal, requestId),
+                }
+            }
+        };
+
+        var result = await _dataverseService.RetrieveMultipleAsync(query);
+        return result.Entities.FirstOrDefault()?.Id;
+    }
+
+    private async Task<Guid?> TryGetExistingActiveJobIdForSsuAsync(
+        Guid ssuId,
+        Guid codedReasonId,
+        string jobEntityName,
+        string jobTypeColumnName)
+    {
+        var ssuLookupColumnName =
+            Environment.GetEnvironmentVariable("RequestSsuLookupColumnName") ?? "voa_statutoryspatialunitid";
+
+        var query = new QueryExpression(jobEntityName)
+        {
+            ColumnSet = new ColumnSet(false),
+            PageInfo = new PagingInfo { PageNumber = 1, Count = 1 },
+            Criteria = new FilterExpression
+            {
+                Conditions =
+                {
+                    new ConditionExpression("statecode", ConditionOperator.Equal, 0),
+                    new ConditionExpression(ssuLookupColumnName, ConditionOperator.Equal, ssuId),
+                    new ConditionExpression(jobTypeColumnName, ConditionOperator.Equal, codedReasonId),
                 }
             }
         };

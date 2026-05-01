@@ -98,7 +98,7 @@ Stores one row per selected or uploaded hereditament / SSU, including validation
 | voa_hereditamentref | Hereditament Reference | Text (100) | No | Yes before submit if allowed | HER-778899 | Optional if available |
 | voa_sourcevalue | Source Value | Text (255) | Yes | System | SSU-200105 | Raw input as received |
 | voa_sourcerownumber | Source Row Number | Whole Number | No | System | 6 | For CSV rows |
-| voa_validationstatus | Validation Status | Choice | Yes | System | Failed | Main line-level status |
+| voa_validationstatus | Validation Status | Choice | Yes | System | Pending | Main line-level status used to track staging and processing outcome |
 | voa_validationmessage | Validation Message | Multiline Text | No | System / admin | voarequestlineitem creation failed due to missing mandatory ownership mapping | Line-level explanation |
 | voa_isduplicate | Is Duplicate | Two Options | Yes | System | Yes | Easy filtering |
 | voa_duplicatecategory | Duplicate Category | Choice | No | System | Same Batch | `Same Batch`, `Existing Open Batch`, `Existing Active Work`, etc. |
@@ -211,7 +211,7 @@ For MVP, use:
 
 | Validation Status | Meaning |
 |---|---|
-| Pending | Item created but not fully validated or not yet submitted |
+| Pending | Item has been staged by SaveItems, but has not yet been validated for submit processing |
 | Valid | Passed staging validation and ready for processing |
 | Invalid | Failed staging validation |
 | Duplicate | Duplicate item identified |
@@ -228,6 +228,15 @@ For MVP, use:
 - Duplicate
 - Processed
 - Failed
+
+#### Pending status lifecycle
+
+`Pending` is the initial bulk item state written by SaveItems:
+
+- it is set when the item row is first staged
+- it is not consumed by the timer as a work queue state
+- the validator moves the item from `Pending` to `Valid`, `Invalid`, or `Duplicate`
+- the timer only processes items that are already `Valid`
 
 ---
 
@@ -616,6 +625,12 @@ This table design stays in Dataverse, but the runtime flow is split across multi
 - Azure Function calls Dataverse Custom APIs for staged processing
 
 This keeps the data model clean and keeps orchestration out of the table design itself.
+
+At runtime, request and incident ownership are derived from the bulk item's assignment:
+
+- if the item is assigned to a team, the created records are owned by that team
+- if the item is assigned to a manager, the created records are owned by that user
+- the submitting user is still retained separately for audit and submission context
 
 ---
 

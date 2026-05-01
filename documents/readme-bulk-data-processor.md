@@ -66,6 +66,7 @@ The processor currently does these steps:
 
 4. SVT path
 - Loads the SVT tracking row and creates the request/job for tracking payloads
+- Uses the tracking row's user id as the owning user context, while bulk request/job ownership still follows the bulk assignment on the staged item
 
 5. Bulk path
 - Requires `bulkProcessorId`
@@ -83,6 +84,7 @@ The processor currently does these steps:
   - accepted for final submit
   - creates requests for valid items
   - for `Request and Job(s)`, creates the incident directly and then performs a bypassed follow-up request update to avoid duplicate plugin firing
+  - sets request and job ownership from the bulk item's assigned team or manager, not from the submitter alone
   - updates parent batch `Draft -> Queued`
 
 ## Important business rule (delete behavior)

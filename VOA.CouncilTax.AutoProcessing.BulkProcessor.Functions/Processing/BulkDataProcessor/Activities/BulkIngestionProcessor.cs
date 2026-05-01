@@ -37,6 +37,7 @@ public class BulkIngestionProcessor
     private const string ItemLockedForProcessingColumn = "voa_lockedforprocessing";
     private const string ItemCanReprocessColumn = "voa_canreprocess";
     private const string ItemSsuIdColumn = "voa_hereditament";
+    private const string ItemOwnerColumn = "ownerid";
     private const string ItemRequestLookupColumn = "voa_requestlookup";
     private const string ItemJobLookupColumn = "voa_joblookup";
     private static string ItemValidationStatusColumn =>
@@ -293,6 +294,8 @@ public class BulkIngestionProcessor
         var checkCrossBatchDuplicates = GetBooleanFlag("BulkIngestionCheckCrossBatchDuplicates", false);
         var crossBatchRejectedCount = 0;
         var eligibleItems = new List<(Entity Entity, RequestJobCreateItem Payload)>(batch.Count);
+        var itemAssignedTeamColumn = Environment.GetEnvironmentVariable("BulkIngestionItemAssignedTeam") ?? "voa_assignedteam";
+        var itemAssignedManagerColumn = Environment.GetEnvironmentVariable("BulkIngestionItemAssignedManager") ?? "voa_assignedmanager";
 
         foreach (var item in batch)
         {
@@ -364,6 +367,7 @@ public class BulkIngestionProcessor
                 new RequestJobCreateItem
                 {
                     ItemId = item.Id,
+                    OwnerRef = ResolveItemOwnerReference(item, itemAssignedTeamColumn, itemAssignedManagerColumn),
                     SsuId = ssuId,
                     SourceType = timerContext.SourceType,
                     SourceValue = item.GetAttributeValue<string>("voa_sourcevalue") ?? ssuId
@@ -866,12 +870,11 @@ public class BulkIngestionProcessor
 
         var hasRemainingValidItems = counts.ValidItemCount > 0;
 
-        // Retryable failures keep the batch in Delayed so the operator can decide whether to re-run it.
         if (counts.ProcessedItemCount == 0)
         {
             if (await HasReprocessableFailuresAsync(ingestionId))
             {
-                return StatusCodes.Delayed;
+                return StatusCodes.PartialSuccess;
             }
 
             return hasRemainingValidItems || counts.InvalidItemCount > 0 || counts.DuplicateItemCount > 0 || counts.FailedItemCount > 0
@@ -881,7 +884,7 @@ public class BulkIngestionProcessor
 
         if (await HasReprocessableFailuresAsync(ingestionId))
         {
-            return StatusCodes.Delayed;
+            return StatusCodes.PartialSuccess;
         }
 
         // Any leftover Valid, Invalid, Duplicate, or Failed rows means the batch is not fully complete yet.
@@ -928,6 +931,26 @@ public class BulkIngestionProcessor
 
         var result = await _crmService.RetrieveMultipleAsync(query);
         return result.Entities.ToList();
+    }
+
+    private EntityReference? ResolveItemOwnerReference(
+        Entity item,
+        string assignedTeamColumnName,
+        string assignedManagerColumnName)
+    {
+        var assignedTeamRef = item.GetAttributeValue<EntityReference>(assignedTeamColumnName);
+        if (assignedTeamRef is not null && assignedTeamRef.Id != Guid.Empty)
+        {
+            return assignedTeamRef;
+        }
+
+        var assignedManagerRef = item.GetAttributeValue<EntityReference>(assignedManagerColumnName);
+        if (assignedManagerRef is not null && assignedManagerRef.Id != Guid.Empty)
+        {
+            return assignedManagerRef;
+        }
+
+        return item.GetAttributeValue<EntityReference>(ItemOwnerColumn);
     }
 
     private bool ShouldCreateRequestJobsInTimer()
@@ -996,7 +1019,7 @@ public class BulkIngestionProcessor
 
         if (failedItems.Any(item => item.GetAttributeValue<bool?>(ItemCanReprocessColumn) == true))
         {
-            return StatusCodes.Delayed;
+            return StatusCodes.PartialSuccess;
         }
 
         if (processedCount > 0)

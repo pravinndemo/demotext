@@ -8,7 +8,6 @@ namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkD
 /// - Draft (358800001) - Initial SaveItems state
 /// - Queued (358800002) - SubmitBatch submitted for processing
 /// - Partial Success (358800003) - Timer: some items succeeded, some failed
-/// - Delayed (358800004) - Timer: Retryable (transient failures)
 /// - Completed (358800009) - Timer: All items succeeded
 /// - Cancelled (358800010) - User cancellation
 /// - Failed (358800012) - Timer: All items failed
@@ -32,7 +31,6 @@ public static class StatusCodes
     public const int Draft = 358800001;          // Initial SaveItems state
     public const int Queued = 358800002;         // SubmitBatch submitted for processing
     public const int PartialSuccess = 358800003; // Timer: some items succeeded, some failed
-    public const int Delayed = 358800004;        // Timer: Retryable (transient failures)
     public const int Completed = 358800009;      // Timer: All items succeeded
     public const int Cancelled = 358800010;      // User cancellation
     public const int Failed = 358800012;         // Timer: All items failed

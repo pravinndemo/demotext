@@ -70,7 +70,7 @@ public sealed class RequestJobCreationService
         return CreateSingleAsync(item, userId, componentName, sourceType, defaultRequestType, jobTypeId, createJob: false);
     }
 
-    public Task<Guid> CreateJobForRequestAsync(
+    public async Task<Guid> CreateJobForRequestAsync(
         Guid requestId,
         RequestJobCreateItem item,
         string userId,
@@ -81,9 +81,9 @@ public sealed class RequestJobCreationService
             throw new ArgumentException("User ID must be a valid GUID.", nameof(userId));
         }
 
-        var jobId = _directJobCreationService.CreateJobForRequest(requestId, item, userIdGuid, componentName);
+        var jobId = await _directJobCreationService.CreateJobForRequest(requestId, item, userIdGuid, componentName);
         _directJobCreationService.UpdateRequestAfterDirectJobCreation(requestId, jobId);
-        return Task.FromResult(jobId);
+        return jobId;
     }
 
     public Task<Guid?> TryGetExistingJobIdForRequestAsync(Guid requestId)
@@ -255,6 +255,8 @@ var requestStatusColumnName =
         string requestStatusColumnName,
         Guid jobTypeId)
     {
+        var ownerRef = item.OwnerRef ?? new EntityReference("systemuser", userId);
+
         var result = new RequestJobCreateResult
         {
             SsuId = item.SsuId,
@@ -391,7 +393,7 @@ var requestStatusColumnName =
                 [requestComponentNameColumnName] = componentName,
 
                 [ConfigurationValues.Owner] =
-                    new EntityReference("systemuser", userId),
+                    ownerRef,
 
                 [requestTypeColumnName] =
                     new EntityReference(
@@ -454,7 +456,7 @@ var requestStatusColumnName =
                 try
                 {
                     result.JobId =
-                        _directJobCreationService.CreateJobForRequest(
+                        await _directJobCreationService.CreateJobForRequest(
                             result.RequestId,
                             item,
                             userId,
@@ -798,6 +800,8 @@ public sealed class RequestJobCreateItem
     public Guid? ItemId { get; set; }
 
     public string SsuId { get; set; } = string.Empty;
+
+    public EntityReference? OwnerRef { get; set; }
 
     public string SourceType { get; set; } = string.Empty;
 

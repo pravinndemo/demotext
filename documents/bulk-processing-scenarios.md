@@ -203,6 +203,7 @@ Expected outcome:
 - Submission metadata is stamped.
 - Requests are created for valid items.
 - If template mode is `Request and Job(s)`, the Azure Function creates the incident directly and links it back to the request and bulk item.
+- Ownership for the created request and incident follows the bulk item's assigned team or manager.
 - Batch becomes read-only for normal edits.
 
 ## Scenario 7: Optional Worker Processing

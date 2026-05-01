@@ -118,7 +118,7 @@ Behavior:
 - Loads queued ingestions (`statuscode=Queued`).
 - Processes valid items in batches.
 - Applies retry policy and per-item state tracking.
-- Finalizes ingestion to `Completed`, `Delayed`, `PartialSuccess`, or `Failed`.
+- Finalizes ingestion to `Completed`, `PartialSuccess`, or `Failed`.
 
 Note:
 
@@ -141,7 +141,7 @@ Item processing-state fields used:
 
 Meaning:
 - `voa_canreprocess=true` means item can be retried in future runs.
-- Ingestion may finalize to `Delayed` when reprocessable failures remain.
+- Ingestion may finalize to `PartialSuccess` when reprocessable failures remain.
 
 ## 8. Source-of-Truth Decision
 
