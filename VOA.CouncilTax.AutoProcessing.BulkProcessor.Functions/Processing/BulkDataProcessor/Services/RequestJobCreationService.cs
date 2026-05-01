@@ -59,6 +59,66 @@ public sealed class RequestJobCreationService
             : batchResult.Results[0];
     }
 
+    public Task<RequestJobCreateResult> CreateRequestOnlyAsync(
+        RequestJobCreateItem item,
+        string userId,
+        string componentName,
+        string? sourceType = null,
+        string? defaultRequestType = null,
+        Guid? jobTypeId = null)
+    {
+        return CreateSingleAsync(item, userId, componentName, sourceType, defaultRequestType, jobTypeId, createJob: false);
+    }
+
+    public async Task<Guid> CreateJobForRequestAsync(
+        Guid requestId,
+        RequestJobCreateItem item,
+        string userId,
+        string componentName)
+    {
+        if (!Guid.TryParse(userId, out var userIdGuid))
+        {
+            throw new ArgumentException("User ID must be a valid GUID.", nameof(userId));
+        }
+
+        var jobId = await _directJobCreationService.CreateJobForRequest(requestId, item, userIdGuid, componentName);
+        _directJobCreationService.UpdateRequestAfterDirectJobCreation(requestId, jobId);
+        return jobId;
+    }
+
+    public Task<Guid?> TryGetExistingJobIdForRequestAsync(Guid requestId)
+    {
+        return _directJobCreationService.TryGetExistingJobIdForRequestAsync(requestId);
+    }
+
+    public async Task<Guid?> TryGetActiveRequestIdAsync(Guid ssuId, string componentName)
+    {
+        var requestEntityName =
+            Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
+        var requestSsuLookupColumnName =
+            Environment.GetEnvironmentVariable("RequestSsuLookupColumnName") ?? "voa_statutoryspatialunitid";
+        var requestComponentNameColumnName =
+            Environment.GetEnvironmentVariable("RequestComponentNameColumnName") ?? "voa_remarks";
+
+        var query = new QueryExpression(requestEntityName)
+        {
+            ColumnSet = new ColumnSet(false),
+            PageInfo = new PagingInfo { PageNumber = 1, Count = 1 },
+            Criteria = new FilterExpression
+            {
+                Conditions =
+                {
+                    new ConditionExpression("statecode", ConditionOperator.Equal, 0),
+                    new ConditionExpression(requestSsuLookupColumnName, ConditionOperator.Equal, ssuId),
+                    new ConditionExpression(requestComponentNameColumnName, ConditionOperator.Equal, componentName),
+                }
+            }
+        };
+
+        var result = await _dataverseService.RetrieveMultipleAsync(query);
+        return result.Entities.FirstOrDefault()?.Id;
+    }
+
     /// <summary>
     /// Creates request/job records for a batch of items.
     /// </summary>
@@ -118,7 +178,7 @@ var requestStatusColumnName =
                 ?? Environment.GetEnvironmentVariable("SvtDefaultRequestType")
                 ?? "Data Enhancement";
 
-            resolvedJobTypeId = await GetCodedReasonIdAsync("voa_codereason", "voa_Value", jobTypeName);
+            resolvedJobTypeId = EntityFields.JobType.DataEnhancement; // Default to known Job Type if not provided and cannot resolve by name
             if (resolvedJobTypeId == Guid.Empty)
             {
                 return new RequestJobBatchResult
@@ -195,6 +255,8 @@ var requestStatusColumnName =
         string requestStatusColumnName,
         Guid jobTypeId)
     {
+        var ownerRef = item.OwnerRef ?? new EntityReference("systemuser", userId);
+
         var result = new RequestJobCreateResult
         {
             SsuId = item.SsuId,
@@ -331,7 +393,7 @@ var requestStatusColumnName =
                 [requestComponentNameColumnName] = componentName,
 
                 [ConfigurationValues.Owner] =
-                    new EntityReference("systemuser", userId),
+                    ownerRef,
 
                 [requestTypeColumnName] =
                     new EntityReference(
@@ -394,7 +456,7 @@ var requestStatusColumnName =
                 try
                 {
                     result.JobId =
-                        _directJobCreationService.CreateJobForRequest(
+                        await _directJobCreationService.CreateJobForRequest(
                             result.RequestId,
                             item,
                             userId,
@@ -419,6 +481,28 @@ var requestStatusColumnName =
             _logger.LogError(ex, "Error creating records for SsuId={SsuId}", item.SsuId);
             return Fail("CREATION_FAILED", ex.Message, StatusCodes.StageRequestCreation);
         }
+    }
+
+    private async Task<bool> RetrieveActiveRequestsAsync(Guid ssuId, Guid jobTypeId)
+    {
+
+        var query = new QueryExpression("voa_requestlineitem")
+
+        {
+            ColumnSet = new ColumnSet(false)
+
+        };
+
+        query.Criteria.AddCondition("statecode", ConditionOperator. Equal, 0);
+        query.Criteria.AddCondition("voa_codedreasonid", ConditionOperator. Equal, jobTypeId);
+        query.Criteria.AddCondition("voa_statutoryspatialunitid", ConditionOperator. Equal, ssuId);
+        var result = await _dataverseService.RetrieveMultipleAsync(query);
+        if (result. Entities != null && result. Entities.Count > 0)
+        {
+                    return true;
+        }
+
+        return false;
     }
 
     private async Task UpdateItemProcessingStateAsync(Guid itemId, int stageCode, bool lockForProcessing)
@@ -716,6 +800,8 @@ public sealed class RequestJobCreateItem
     public Guid? ItemId { get; set; }
 
     public string SsuId { get; set; } = string.Empty;
+
+    public EntityReference? OwnerRef { get; set; }
 
     public string SourceType { get; set; } = string.Empty;
 

@@ -20,7 +20,25 @@ File: `Processing/BulkDataProcessor/Processing/T_BulkDataHttpTrigger.cs`
 ### 1.3 `POST /bulk-data/svt-single`
 - Function: `T_SvtSingleHttpTrigger`
 - Routed as SVT-only flow.
-- Purpose: direct single-item request/job creation.
+- Purpose: tracking-row dispatch when the payload carries `svtProcessingId`.
+
+### 1.4 SVT tracking model
+Target design uses a separate SVT tracking table instead of bulk staging tables:
+
+- table: `voa_svtprocessing`
+- trigger field: `voa_dispatchstate`
+- lifecycle field: `voa_status`
+- output fields: `voa_requestid`, `voa_jobid`, `voa_errormessage`
+
+The intended flow is:
+
+1. PCF updates the SVT tracking row and sets dispatch state to `Requested`.
+2. Async plug-in calls Azure Function.
+3. Azure Function creates the request.
+4. Azure Function updates the SVT row with `requestId` and `RequestCreated`.
+5. Azure Function creates the job.
+6. Azure Function updates the SVT row with `jobId` and `Completed`.
+7. PCF polls the SVT row until it reaches `Completed` or `Failed`.
 
 ## 2. Request Contract
 
@@ -33,6 +51,7 @@ Fields:
 - `ssuId?: string` (SVT mode)
 - `userId?: string` (SVT or submit user resolution)
 - `componentName?: string` (SVT metadata)
+- `svtProcessingId?: Guid` (SVT tracking-row dispatch)
 - `fileColumnName?: string` (defaults to `voa_sourcefile`)
 - `requestedBy?: string` (submit user fallback)
 - `correlationId?: string`
@@ -42,9 +61,15 @@ Fields:
 Resolved by `BulkDataRouteDecisionBuilder`:
 - `BULK_SELECTION`: `bulkProcessorId + ssuIds[]`
 - `BULK_FILE`: `bulkProcessorId` only
-- `SVT_SINGLE`: `ssuId + userId + componentName`
+- `SVT_TRACKING`: `svtProcessingId`
 
 Invalid combinations are rejected with error `Code`.
+
+SVT tracking rows should also reject:
+
+- missing or duplicate `correlationId`
+- missing `svtProcessingId`
+- repeated dispatch when `voa_status` is already `Processing` or `Completed`
 
 ## 4. Response Contract
 
@@ -93,7 +118,12 @@ Behavior:
 - Loads queued ingestions (`statuscode=Queued`).
 - Processes valid items in batches.
 - Applies retry policy and per-item state tracking.
-- Finalizes ingestion to `Completed`, `Delayed`, `PartialSuccess`, or `Failed`.
+- Finalizes ingestion to `Completed`, `PartialSuccess`, or `Failed`.
+
+Note:
+
+- SVT should not be routed through the bulk timer in the target design.
+- SVT uses the separate tracking row and async plug-in handoff described above.
 
 ## 7. Retry and Processing-State Contract (Timer)
 
@@ -111,7 +141,7 @@ Item processing-state fields used:
 
 Meaning:
 - `voa_canreprocess=true` means item can be retried in future runs.
-- Ingestion may finalize to `Delayed` when reprocessable failures remain.
+- Ingestion may finalize to `PartialSuccess` when reprocessable failures remain.
 
 ## 8. Source-of-Truth Decision
 

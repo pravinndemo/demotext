@@ -14,10 +14,16 @@ using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataP
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Activities;
 
-public sealed class BulkDataRequestProcessor
+public sealed partial class BulkDataRequestProcessor
 {
     private readonly ILogger _logger;
     private readonly IOrganizationServiceAsync2 _dataverseService;
+    private readonly SvtProcessingTrackingService _svtTrackingService;
+
+    private const string BulkProcessingStatusColumn = "voa_processingstatus";
+    private const string BulkProcessingStartedOnColumn = "voa_processingstartedon";
+    private const string BulkProcessedOnColumn = "voa_processedon";
+    private const string BulkErrorSummaryColumn = "voa_errorsummary";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -28,10 +34,12 @@ public sealed class BulkDataRequestProcessor
     {
         _logger = logger;
         _dataverseService = dataverseService;
+        _svtTrackingService = new SvtProcessingTrackingService(dataverseService, logger);
     }
 
     public async Task<IActionResult> ProcessRequest(HttpRequest req, BulkRequestAction? bulkAction, bool svtOnly)
     {
+        // This method is the HTTP orchestration layer: deserialize, route, validate, then dispatch to the right flow.
         _logger.LogInformation("T_BulkDataHttpTrigger invoked. BulkAction={BulkAction}, SvtOnly={SvtOnly}", bulkAction, svtOnly);
 
         BulkDataRouteDecisionRequest? request;
@@ -62,8 +70,8 @@ public sealed class BulkDataRequestProcessor
         }
 
         _logger.LogInformation(
-            "Processing request. BulkAction={BulkAction}, BulkProcessorId={BulkProcessorId}, SourceType={SourceType}, SsuIdsCount={SsuIdsCount}, SsuId={SsuId}, UserId={UserId}, ComponentName={ComponentName}, RequestedBy={RequestedBy}, CorrelationId={CorrelationId}",
-            bulkAction, request.BulkProcessorId, request.SourceType, request.SsuIds?.Count ?? 0, request.SsuId, request.UserId, request.ComponentName, request.RequestedBy, request.CorrelationId);
+            "Processing request. BulkAction={BulkAction}, BulkProcessorId={BulkProcessorId}, SourceType={SourceType}, SsuIdsCount={SsuIdsCount}, SsuId={SsuId}, UserId={UserId}, ComponentName={ComponentName}, SvtProcessingId={SvtProcessingId}, RequestedBy={RequestedBy}, CorrelationId={CorrelationId}",
+            bulkAction, request.BulkProcessorId, request.SourceType, request.SsuIds?.Count ?? 0, request.SsuId, request.UserId, request.ComponentName, request.SvtProcessingId, request.RequestedBy, request.CorrelationId);
 
         var decision = BulkDataRouteDecisionBuilder.BuildDecision(request);
         decision.CorrelationId = request.CorrelationId;
@@ -73,18 +81,18 @@ public sealed class BulkDataRequestProcessor
             return new BadRequestObjectResult(decision);
         }
 
-        if (svtOnly && decision.RouteMode != "SVT_SINGLE")
+        if (svtOnly && decision.RouteMode != "SVT_TRACKING")
         {
             return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
             {
                 Accepted = false,
                 Code = "INVALID_ROUTE_FOR_ENDPOINT",
-                Message = "This endpoint only accepts SVT payload (ssuid + userId + componentName).",
+                Message = "This endpoint only accepts SVT tracking payload (svtProcessingId).",
                 CorrelationId = request.CorrelationId,
             });
         }
 
-        if (!svtOnly && bulkAction.HasValue && decision.RouteMode == "SVT_SINGLE")
+        if (!svtOnly && bulkAction.HasValue && decision.RouteMode == "SVT_TRACKING")
         {
             return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
             {
@@ -95,76 +103,9 @@ public sealed class BulkDataRequestProcessor
             });
         }
 
-        if (decision.RouteMode == "SVT_SINGLE")
+        if (decision.RouteMode == "SVT_TRACKING")
         {
-            // Handle SVT direct request/job creation
-            try
-            {
-                _logger.LogInformation(
-                    "Processing SVT single-item request. SsuId={SsuId}, UserId={UserId}, ComponentName={ComponentName}, CorrelationId={CorrelationId}",
-                    request.SsuId, request.UserId, request.ComponentName, request.CorrelationId);
-
-                var creator = new RequestJobCreationService(_dataverseService, _logger);
-                var creationResult = await creator.CreateSingleAsync(
-                    new RequestJobCreateItem
-                    {
-                        SsuId = request.SsuId ?? string.Empty,
-                        SourceType = decision.SourceType ?? "SVT",
-                        SourceValue = request.SsuId ?? string.Empty,
-                    },
-                    request.UserId ?? string.Empty,
-                    request.ComponentName ?? "DirectAPI",
-                    decision.SourceType);
-
-                if (!creationResult.Success)
-                {
-                    _logger.LogError(
-                        "SVT creation failed. ErrorCode={ErrorCode}, ErrorMessage={ErrorMessage}, CorrelationId={CorrelationId}",
-                        creationResult.ErrorCode, creationResult.ErrorMessage, request.CorrelationId);
-
-                    return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
-                    {
-                        Accepted = false,
-                        Code = creationResult.ErrorCode,
-                        Message = $"SVT request/job creation failed: {creationResult.ErrorMessage}",
-                        CorrelationId = request.CorrelationId,
-                        Action = "SvtSingle",
-                    });
-                }
-
-                decision.Action = "SvtSingle";
-                decision.SourceType = creationResult.SourceType;
-                decision.StagingStatus = "Created";
-                decision.ReceivedCount = 1;
-                decision.RequestId = creationResult.RequestId;
-                decision.JobId = creationResult.JobId == Guid.Empty ? null : creationResult.JobId;
-                decision.Message = $"SVT request/job created successfully. RequestId={creationResult.RequestId:N}, JobId={creationResult.JobId:N}";
-
-                _logger.LogInformation(
-                    "SVT creation succeeded. RequestId={RequestId}, JobId={JobId}, CorrelationId={CorrelationId}",
-                    creationResult.RequestId, creationResult.JobId, request.CorrelationId);
-
-                return new AcceptedResult(string.Empty, decision);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Error processing SVT request. SsuId={SsuId}, CorrelationId={CorrelationId}",
-                    request.SsuId, request.CorrelationId);
-
-                return new ObjectResult(new BulkDataRouteDecisionResponse
-                {
-                    Accepted = false,
-                    Code = "SVT_CREATION_ERROR",
-                    Message = "SVT request/job creation failed. See logs for details.",
-                    CorrelationId = request.CorrelationId,
-                    Action = "SvtSingle",
-                })
-                {
-                    StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError,
-                };  
-            }
+            return await HandleSvtTrackingAsync(request);
         }
 
         if (request.BulkProcessorId == Guid.Empty)
@@ -224,7 +165,7 @@ public sealed class BulkDataRequestProcessor
             };
         }
 
-        // Gate check: both SaveItems and SubmitBatch run only when batch is Draft.
+        // Both SaveItems and SubmitBatch are only allowed while the batch is still Draft.
         var currentStatus = GetFormattedValueOrEmpty(bulkProcessor, customStatusColumnName);
         var currentStatusCode = GetOptionSetValueOrNull(bulkProcessor, customStatusColumnName);
         if (currentStatusCode != draftStatusCode)
@@ -260,8 +201,7 @@ public sealed class BulkDataRequestProcessor
         decision.SourceType = string.IsNullOrWhiteSpace(request.SourceType)
             ? (templateSettings.FormatLabel ?? sourceTypeFallback)
             : request.SourceType;
-        // SaveItems is create/update only. Deletions are explicit user actions on the form/subgrid
-        // and are not inferred from missing items in the incoming payload.
+        // SaveItems is create/update only. Missing rows are not treated as deletes.
         if (decision.RouteMode == "BULK_SELECTION")
         {
             decision.ReceivedCount = request.SsuIds?.Count ?? 0;
@@ -280,67 +220,77 @@ public sealed class BulkDataRequestProcessor
 
         if (action == BulkRequestAction.SubmitBatch)
         {
-            if (!templateSettings.FromTemplate || string.IsNullOrWhiteSpace(templateSettings.FormatLabel))
-            {
-                return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
-                {
-                    Accepted = false,
-                    Code = "TEMPLATE_SOURCE_REQUIRED",
-                    Message = "SubmitBatch requires a selected template with Format (voa_format) configured.",
-                    BulkProcessorId = request.BulkProcessorId,
-                    CorrelationId = request.CorrelationId,
-                    Action = action.ToString(),
-                });
-            }
-
-            if (totalRows <= 0)
-            {
-                return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
-                {
-                    Accepted = false,
-                    Code = "NO_ITEMS_TO_SUBMIT",
-                    Message = "Batch has no items. Save items before submitting.",
-                    BulkProcessorId = request.BulkProcessorId,
-                    CorrelationId = request.CorrelationId,
-                    Action = action.ToString(),
-                });
-            }
-
-            if (validItemCount <= 0)
-            {
-                return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
-                {
-                    Accepted = false,
-                    Code = "NO_VALID_ITEMS_TO_SUBMIT",
-                    Message = "Batch has no valid items. Fix item validation issues before submitting.",
-                    BulkProcessorId = request.BulkProcessorId,
-                    CorrelationId = request.CorrelationId,
-                    Action = action.ToString(),
-                });
-            }
-
-            if (!templateSettings.JobTypeId.HasValue || templateSettings.JobTypeId.Value == Guid.Empty)
-            {
-                return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
-                {
-                    Accepted = false,
-                    Code = "JOB_TYPE_REQUIRED",
-                    Message = "Job Type is required. Configure Job Type on the selected template (voa_jobtypelookup) or set Processing Job Type on the bulk ingestion header.",
-                    BulkProcessorId = request.BulkProcessorId,
-                    CorrelationId = request.CorrelationId,
-                    Action = action.ToString(),
-                });
-            }
-
-            _logger.LogInformation(
-                "SubmitBatch accepted in queue-only mode; timer will create request/job for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
-                request.BulkProcessorId,
-                request.CorrelationId);
-            decision.Message += " Request/job creation deferred to timer (queue-only mode).";
-
-            // SubmitBatch is the only action that transitions batch status Draft -> Queued.
             try
             {
+                // Final submit requires a template-defined format and a usable job type.
+                if (!templateSettings.FromTemplate || string.IsNullOrWhiteSpace(templateSettings.FormatLabel))
+                {
+                    return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
+                    {
+                        Accepted = false,
+                        Code = "TEMPLATE_SOURCE_REQUIRED",
+                        Message = "SubmitBatch requires a selected template with Format (voa_format) configured.",
+                        BulkProcessorId = request.BulkProcessorId,
+                        CorrelationId = request.CorrelationId,
+                        Action = action.ToString(),
+                    });
+                }
+
+                if (totalRows <= 0)
+                {
+                    return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
+                    {
+                        Accepted = false,
+                        Code = "NO_ITEMS_TO_SUBMIT",
+                        Message = "Batch has no items. Save items before submitting.",
+                        BulkProcessorId = request.BulkProcessorId,
+                        CorrelationId = request.CorrelationId,
+                        Action = action.ToString(),
+                    });
+                }
+
+                if (validItemCount <= 0)
+                {
+                    return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
+                    {
+                        Accepted = false,
+                        Code = "NO_VALID_ITEMS_TO_SUBMIT",
+                        Message = "Batch has no valid items. Fix item validation issues before submitting.",
+                        BulkProcessorId = request.BulkProcessorId,
+                        CorrelationId = request.CorrelationId,
+                        Action = action.ToString(),
+                    });
+                }
+
+                if (!templateSettings.JobTypeId.HasValue || templateSettings.JobTypeId.Value == Guid.Empty)
+                {
+                    return new BadRequestObjectResult(new BulkDataRouteDecisionResponse
+                    {
+                        Accepted = false,
+                        Code = "JOB_TYPE_REQUIRED",
+                        Message = "Job Type is required. Configure Job Type on the selected template (voa_jobtypelookup) or set Processing Job Type on the bulk ingestion header.",
+                        BulkProcessorId = request.BulkProcessorId,
+                        CorrelationId = request.CorrelationId,
+                        Action = action.ToString(),
+                    });
+                }
+
+                await TryUpdateProcessingStateAsync(
+                    request.BulkProcessorId,
+                    bulkProcessorEntityName,
+                    processingStatusValue: Constants.StatusCodes.ProcessingStatusProcessing,
+                    processingStartedOn: DateTime.UtcNow,
+                    processedOn: null,
+                    errorSummary: null,
+                    correlationId: request.CorrelationId);
+
+                _logger.LogInformation(
+                    "SubmitBatch accepted in queue-only mode; timer will create request/job for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                    request.BulkProcessorId,
+                    request.CorrelationId);
+                decision.Message += " Request/job creation deferred to timer (queue-only mode).";
+
+                // The submit action moves the batch from Draft to Queued so the timer can pick it up.
                 var updateEntity = new Entity(bulkProcessorEntityName, request.BulkProcessorId);
                 updateEntity[customStatusColumnName] = new OptionSetValue(queuedStatusCode);
                 _dataverseService.Update(updateEntity);
@@ -353,31 +303,81 @@ public sealed class BulkDataRequestProcessor
             {
                 _logger.LogError(
                     ex,
-                    "Failed to update batch {BulkProcessorId} status to Queued ({QueuedStatusCode}). CorrelationId: {CorrelationId}",
-                    request.BulkProcessorId, queuedStatusCode, request.CorrelationId);
-                // Continue processing even if status update fails, as staging may have partially succeeded
-                decision.Message += " [Warning: Status transition failed]";
+                    "Failed to submit batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                    request.BulkProcessorId, request.CorrelationId);
+
+                await TryUpdateProcessingStateAsync(
+                    request.BulkProcessorId,
+                    bulkProcessorEntityName,
+                    processingStatusValue: Constants.StatusCodes.ProcessingStatusFailed,
+                    processingStartedOn: null,
+                    processedOn: DateTime.UtcNow,
+                    errorSummary: ex.Message,
+                    correlationId: request.CorrelationId);
+
+                return new ObjectResult(new BulkDataRouteDecisionResponse
+                {
+                    Accepted = false,
+                    Code = "SUBMIT_BATCH_FAILED",
+                    Message = "Failed to submit batch. See logs for details.",
+                    BulkProcessorId = request.BulkProcessorId,
+                    CorrelationId = request.CorrelationId,
+                    Action = action.ToString(),
+                })
+                {
+                    StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError,
+                };
             }
 
             var bulkIngestionItemEntityName = Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
             var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
 
-            var submitWarning = await GetCrossBatchDuplicateWarningAsync(
+            try
+            {
+                var submitWarning = await GetCrossBatchDuplicateWarningAsync(
+                    request.BulkProcessorId,
+                    bulkProcessorEntityName,
+                    bulkIngestionItemEntityName,
+                    bulkIngestionItemParentLookupColumnName,
+                    validationMessageColumnName: Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason");
+                if (!string.IsNullOrWhiteSpace(submitWarning))
+                {
+                    decision.Message += $" {submitWarning}";
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Unable to build submit warning for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                    request.BulkProcessorId,
+                    request.CorrelationId);
+                decision.Message += " [Warning: unable to resolve duplicate warning details.]";
+            }
+
+            await TryUpdateProcessingStateAsync(
                 request.BulkProcessorId,
                 bulkProcessorEntityName,
-                bulkIngestionItemEntityName,
-                bulkIngestionItemParentLookupColumnName,
-                validationMessageColumnName: Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason");
-            if (!string.IsNullOrWhiteSpace(submitWarning))
-            {
-                decision.Message += $" {submitWarning}";
-            }
+                processingStatusValue: Constants.StatusCodes.ProcessingStatusProcessed,
+                processingStartedOn: null,
+                processedOn: DateTime.UtcNow,
+                errorSummary: null,
+                correlationId: request.CorrelationId);
         }
         else if (action == BulkRequestAction.SaveItems)
         {
-            // SaveItems: create or update items from payload, recalculate counters
+            // SaveItems: create or update items from payload, then refresh the aggregate counts.
             try
             {
+                await TryUpdateProcessingStateAsync(
+                    request.BulkProcessorId,
+                    bulkProcessorEntityName,
+                    processingStatusValue: Constants.StatusCodes.ProcessingStatusProcessing,
+                    processingStartedOn: DateTime.UtcNow,
+                    processedOn: null,
+                    errorSummary: null,
+                    correlationId: request.CorrelationId);
+
                 var saveItemsWarning = await HandleSaveItemsAsync(
                     request,
                     request.BulkProcessorId,
@@ -385,11 +385,21 @@ public sealed class BulkDataRequestProcessor
                     totalRowsColumnName,
                     validItemCountColumnName);
 
+                // SaveItems is a Draft-only staging operation. It should not advance the parent batch state.
                 decision.Message += " Items saved/updated. Batch remains in Draft.";
                 if (!string.IsNullOrWhiteSpace(saveItemsWarning))
                 {
                     decision.Message += $" {saveItemsWarning}";
                 }
+
+                await TryUpdateProcessingStateAsync(
+                    request.BulkProcessorId,
+                    bulkProcessorEntityName,
+                    processingStatusValue: Constants.StatusCodes.ProcessingStatusProcessed,
+                    processingStartedOn: null,
+                    processedOn: DateTime.UtcNow,
+                    errorSummary: null,
+                    correlationId: request.CorrelationId);
             }
             catch (Exception ex)
             {
@@ -397,6 +407,16 @@ public sealed class BulkDataRequestProcessor
                     ex,
                     "Failed to save items for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
                     request.BulkProcessorId, request.CorrelationId);
+
+                await TryUpdateProcessingStateAsync(
+                    request.BulkProcessorId,
+                    bulkProcessorEntityName,
+                    processingStatusValue: Constants.StatusCodes.ProcessingStatusFailed,
+                    processingStartedOn: null,
+                    processedOn: DateTime.UtcNow,
+                    errorSummary: ex.Message,
+                    correlationId: request.CorrelationId);
+
                 return new ObjectResult(new BulkDataRouteDecisionResponse
                 {
                     Accepted = false,
@@ -418,6 +438,10 @@ public sealed class BulkDataRequestProcessor
 
         return new AcceptedResult(string.Empty, decision);
     }
+
+    /// <summary>
+    /// Saves or updates staged bulk items, validates them, and refreshes the parent counter columns.
+    /// </summary>
     private async Task<string?> HandleSaveItemsAsync(
     BulkDataRouteDecisionRequest request,
     Guid bulkProcessorId,
@@ -439,14 +463,21 @@ public sealed class BulkDataRequestProcessor
         Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_hereditament";
     var sourceValueColumnName =
         Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_source";
-    var validationStatusColumnName =
-        Environment.GetEnvironmentVariable("BulkInestionItemValidationStatusColumnName") ?? "voa_validationstatus";
+        var validationStatusColumnName =
+        Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName") ?? "voa_validationstatus";
 
     var assignedManagerColumn =
         Environment.GetEnvironmentVariable("BulkIngestionItemAssignedManager") ?? "voa_assignedmanager";
 
     var assignedTeamColumn =
         Environment.GetEnvironmentVariable("BulkIngestionItemAssignedTeam") ?? "voa_assignedteam";
+
+    // Chunk size and retry configuration with safe defaults.
+    // These settings control how the SaveItems path batches Dataverse writes.
+    var executeMultipleChunkSize = GetIntConfigValue("BulkSaveItemsExecuteMultipleChunkSize", defaultValue: 100, min: 1, max: 1000);
+    var itemUpsertChunkSize = GetIntConfigValue("BulkSaveItemsItemUpsertChunkSize", defaultValue: 100, min: 1, max: 1000);
+    var chunkMaxRetries = GetIntConfigValue("BulkSaveItemsMaxRetries", defaultValue: 3, min: 0, max: 10);
+    var chunkBaseDelayMs = GetIntConfigValue("BulkSaveItemsBaseDelayMs", defaultValue: 500, min: 50, max: 30000);
 
     var pendingStatusValue = new OptionSetValue(Constants.StatusCodes.Pending);
 
@@ -479,19 +510,12 @@ public sealed class BulkDataRequestProcessor
     var bulkItemWriter = new DataverseBulkItemWriter(_dataverseService);
     var bulkDataIngestionItemRequests = new List<OrganizationRequest>();
 
-    var upsertRequest = new ExecuteMultipleRequest()
-    {
-        Settings = new ExecuteMultipleSettings()
-        {
-            ContinueOnError = true,
-            ReturnResponses = true
-        },
-        Requests = new OrganizationRequestCollection()
-    };
+    // Build flat list of voa_UpsertHereditamentLinkV1 requests; executed in chunks below.
+    var executeMultipleRequests = new List<OrganizationRequest>();
 
     var csvRowsParsed = 0;
 
-    // For BULK_SELECTION: create/update items for provided SSU IDs
+    // BULK_SELECTION creates or updates items directly from the selected SSU ids.
     if (request.SsuIds?.Count > 0)
     {
         // Retrieve existing items for this batch
@@ -544,7 +568,7 @@ public sealed class BulkDataRequestProcessor
         {
             Entity itemEntity;
 
-            upsertRequest.Requests.Add(UpsertRequest(ssuId.StatutorySpatialUnitId));
+            executeMultipleRequests.Add(UpsertRequest(ssuId.StatutorySpatialUnitId));
 
             if (existingBySSUId.TryGetValue(ssuId.StatutorySpatialUnitId.ToString(), out var existingItem))
             {
@@ -577,9 +601,9 @@ public sealed class BulkDataRequestProcessor
         }
     }
 
-    // For BULK_FILE: parse CSV from Dataverse file column
-    else
-    {
+        // BULK_FILE reads the CSV from Dataverse and converts each row into a staged item.
+        else
+        {
         var fileColumnName = request.FileColumnName ?? "voa_sourcefile";
         var csvParser = new CsvFileParser(_dataverseService, _logger);
 
@@ -611,7 +635,7 @@ public sealed class BulkDataRequestProcessor
             // Build upsert requests from CSV rows
             foreach (var csvRow in csvRows)
             {
-                upsertRequest.Requests.Add(UpsertRequest(new Guid(csvRow.SsuId)));
+                executeMultipleRequests.Add(UpsertRequest(new Guid(csvRow.SsuId)));
 
                 var itemEntity = new Entity(bulkIngestionItemEntityName)
                 {
@@ -658,46 +682,86 @@ public sealed class BulkDataRequestProcessor
         }
     }
 
-    // Execute batch writes if any
-    if (bulkDataIngestionItemRequests.Count > 0)
+    // Execute the staged writes in chunks; partial failures are allowed if at least one request succeeds.
+    string? writeChunkWarning = null;
+    if (executeMultipleRequests.Count > 0 || bulkDataIngestionItemRequests.Count > 0)
     {
         var writeSw = Stopwatch.StartNew();
+        var allChunkErrors = new List<string>();
+        var totalSucceededRequests = 0;
+        var totalFailedRequests = 0;
 
-        await _dataverseService.ExecuteAsync(upsertRequest);
+            // 1) Create/update the request-facing records first.
+            if (executeMultipleRequests.Count > 0)
+            {
+            _logger.LogInformation(
+                "Executing ExecuteMultiple in chunks. TotalRequests={TotalRequests} ChunkSize={ChunkSize} CorrelationId={CorrelationId}",
+                executeMultipleRequests.Count, executeMultipleChunkSize, request.CorrelationId);
 
-        var writeResult = bulkItemWriter.ExecuteItemRequestsAsync(bulkDataIngestionItemRequests);
+            var (succeeded, failed, errors) = await ExecuteMultipleInChunksAsync(
+                executeMultipleRequests,
+                executeMultipleChunkSize,
+                chunkMaxRetries,
+                chunkBaseDelayMs,
+                "SaveItems.ExecuteMultiple",
+                request.CorrelationId);
+
+            totalSucceededRequests += succeeded;
+            totalFailedRequests += failed;
+            allChunkErrors.AddRange(errors);
+        }
+
+        // 2) Bulk ingestion item upserts in chunks
+        if (bulkDataIngestionItemRequests.Count > 0)
+        {
+            _logger.LogInformation(
+                "Executing ingestion item upserts in chunks. TotalRequests={TotalRequests} ChunkSize={ChunkSize} CorrelationId={CorrelationId}",
+                bulkDataIngestionItemRequests.Count, itemUpsertChunkSize, request.CorrelationId);
+
+            var (succeeded, failed, errors) = await ExecuteMultipleInChunksAsync(
+                bulkDataIngestionItemRequests,
+                itemUpsertChunkSize,
+                chunkMaxRetries,
+                chunkBaseDelayMs,
+                "SaveItems.ItemUpserts",
+                request.CorrelationId);
+
+            totalSucceededRequests += succeeded;
+            totalFailedRequests += failed;
+            allChunkErrors.AddRange(errors);
+        }
 
         writeSw.Stop();
 
         _logger.LogInformation(
-            "Batch upsert completed for batch {BulkProcessorId}: {SuccessCount} succeeded, {FailureCount} failed. CorrelationId: {CorrelationId}",
+            "Performance.SaveItemsWrite Batch={BulkProcessorId} ExecuteMultipleRequests={ExecuteMultipleRequests} ItemUpsertRequests={ItemUpsertRequests} SucceededRequests={SucceededRequests} FailedRequests={FailedRequests} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
             bulkProcessorId,
-            writeResult.Result.SucceededOperationCount,
-            writeResult.Result.FailedOperationCount,
-            request.CorrelationId);
-
-        _logger.LogInformation(
-            "Performance.SaveItemsWrite Batch={BulkProcessorId} Requested={Requested} Succeeded={Succeeded} Failed={Failed} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
-            bulkProcessorId,
-            writeResult.Result.RequestedOperationCount,
-            writeResult.Result.SucceededOperationCount,
-            writeResult.Result.FailedOperationCount,
+            executeMultipleRequests.Count,
+            bulkDataIngestionItemRequests.Count,
+            totalSucceededRequests,
+            totalFailedRequests,
             writeSw.ElapsedMilliseconds,
             request.CorrelationId);
 
-        if (writeResult.Result.Errors.Count > 0)
+        if (allChunkErrors.Count > 0)
         {
+            if (totalSucceededRequests == 0)
+            {
+                // All writes failed — escalate so the caller returns an error response.
+                throw new InvalidOperationException(
+                    $"All write requests failed for batch {bulkProcessorId}. Errors: {string.Join("; ", allChunkErrors)}");
+            }
+
+            // Some writes succeeded — record as warning and continue (partial success).
+            writeChunkWarning = $"[PartialWriteFailure: {totalFailedRequests} of {totalSucceededRequests + totalFailedRequests} request(s) failed. First error: {allChunkErrors[0]}]";
             _logger.LogWarning(
-                "Errors during batch write for batch {BulkProcessorId}: {ErrorCount} errors. First error: {FirstError}. CorrelationId: {CorrelationId}",
-                bulkProcessorId,
-                writeResult.Result.Errors.Count,
-                writeResult.Result.Errors.FirstOrDefault() ?? "N/A",
-                request.CorrelationId);
+                "Partial write failure during SaveItems. FailedRequests={FailedRequests} TotalRequests={TotalRequests} CorrelationId={CorrelationId}",
+                totalFailedRequests, totalSucceededRequests + totalFailedRequests, request.CorrelationId);
         }
     }
 
-    // Validate items after writes (staging validation)
-    var validateSw = Stopwatch.StartNew();
+        // Validate after the writes so the counters reflect the persisted state, not just the payload.
+        var validateSw = Stopwatch.StartNew();
 
     var validator = new BulkItemValidator(_dataverseService, _logger);
 
@@ -758,7 +822,7 @@ public sealed class BulkDataRequestProcessor
         recalculatedCounts.DuplicateItemCount,
         request.CorrelationId);
 
-    // Update batch counters
+    // Refresh the parent bulk header counters from the newly validated item set.
     var updateCountersSw = Stopwatch.StartNew();
 
     bulkItemWriter.UpdateBatchCounters(bulkProcessorId, recalculatedCounts);
@@ -773,11 +837,12 @@ public sealed class BulkDataRequestProcessor
         request.CorrelationId);
 
     _logger.LogInformation(
-        "Performance.SaveItemsSummary Batch={BulkProcessorId} RouteMode={RouteMode} SelectionInputCount={SelectionInputCount} CsvRowsParsed={CsvRowsParsed} UpsertRequests={UpsertRequests} TotalRows={TotalRows} ValidItems={ValidItems} InvalidItems={InvalidItems} DuplicateItems={DuplicateItems} RecalcElapsedMs={RecalcElapsedMs} CounterUpdateElapsedMs={CounterUpdateElapsedMs} TotalElapsedMs={TotalElapsedMs} CorrelationId={CorrelationId}",
+        "Performance.SaveItemsSummary Batch={BulkProcessorId} RouteMode={RouteMode} SelectionInputCount={SelectionInputCount} CsvRowsParsed={CsvRowsParsed} ExecuteMultipleRequests={ExecuteMultipleRequests} ItemUpsertRequests={ItemUpsertRequests} TotalRows={TotalRows} ValidItems={ValidItems} InvalidItems={InvalidItems} DuplicateItems={DuplicateItems} RecalcElapsedMs={RecalcElapsedMs} CounterUpdateElapsedMs={CounterUpdateElapsedMs} TotalElapsedMs={TotalElapsedMs} CorrelationId={CorrelationId}",
         bulkProcessorId,
         request.SsuIds?.Count > 0 ? "BULK_SELECTION" : "BULK_FILE",
         request.SsuIds?.Count ?? 0,
         csvRowsParsed,
+        executeMultipleRequests.Count,
         bulkDataIngestionItemRequests.Count,
         recalculatedCounts.TotalRows,
         recalculatedCounts.ValidItemCount,
@@ -788,9 +853,13 @@ public sealed class BulkDataRequestProcessor
         saveItemsSw.ElapsedMilliseconds,
         request.CorrelationId);
 
-    return validationResult.CrossBatchDuplicateBatches.Count > 0
-        ? CrossBatchDuplicateMessageHelper.BuildErrorMessage(validationResult.CrossBatchDuplicateBatches)
-        : null;
+    var warnings = new List<string>();
+    if (validationResult.CrossBatchDuplicateBatches.Count > 0)
+        warnings.Add(CrossBatchDuplicateMessageHelper.BuildErrorMessage(validationResult.CrossBatchDuplicateBatches));
+    if (writeChunkWarning is not null)
+        warnings.Add(writeChunkWarning);
+
+    return warnings.Count > 0 ? string.Join(" ", warnings) : null;
 }
 
     private async Task<string?> GetCrossBatchDuplicateWarningAsync(
@@ -838,261 +907,6 @@ public sealed class BulkDataRequestProcessor
                 bulkProcessorEntityName);
             return null;
         }
-    }
-
-    private async Task<RequestJobBatchResult> CreateRequestsAndJobsForValidItemsAsync(
-        Guid bulkProcessorId,
-        string submitUserId,
-        string componentName,
-        string sourceType,
-        string? correlationId,
-        Guid? jobTypeId = null,
-        bool createJob = true,
-        string? processingRunId = null)
-    {
-        var createFlowSw = Stopwatch.StartNew();
-        var bulkProcessorEntityName = Environment.GetEnvironmentVariable("BulkProcessorEntityLogicalName") ?? "voa_bulkingestion";
-        var bulkIngestionItemEntityName = Environment.GetEnvironmentVariable("BulkIngestionItemEntityLogicalName") ?? "voa_bulkingestionitem";
-        var bulkIngestionItemParentLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemParentLookupColumnName") ?? "voa_parentbulkingestion";
-        var ssuIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSSUIdColumnName") ?? "voa_ssuid";
-        var sourceValueColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_sourcevalue";
-        var validationStatusColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName") ?? "voa_validationstatus";
-        var validationMessageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason";
-        var requestLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemRequestLookupColumnName") ?? "voa_requestlookup";
-        var jobLookupColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemJobLookupColumnName") ?? "voa_joblookup";
-        var processingStageColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingStageColumnName") ?? "voa_processingstage";
-        var processingRunIdColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingRunIdColumnName") ?? "voa_processingrunid";
-        var processingTimestampColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingTimestampColumnName") ?? "voa_processingtimestamp";
-        var processingAttemptCountColumnName = Environment.GetEnvironmentVariable("BulkIngestionItemProcessingAttemptCountColumnName") ?? "voa_processingattemptcount";
-
-        var validStatus = Environment.GetEnvironmentVariable("BulkIngestionItemValidStatus") ?? "Valid";
-        var processedStatus = Environment.GetEnvironmentVariable("BulkIngestionItemProcessedStatus") ?? "Processed";
-        var failedStatus = Environment.GetEnvironmentVariable("BulkIngestionItemFailedStatus") ?? "Failed";
-
-        var validItemsQuery = new QueryExpression(bulkIngestionItemEntityName)
-        {
-            ColumnSet = new ColumnSet(ssuIdColumnName, sourceValueColumnName, processingAttemptCountColumnName),
-            Criteria = new FilterExpression
-            {
-                Conditions =
-                {
-                    new ConditionExpression(bulkIngestionItemParentLookupColumnName, ConditionOperator.Equal, bulkProcessorId),
-                    new ConditionExpression(validationStatusColumnName, ConditionOperator.Equal, validStatus),
-                }
-            }
-        };
-
-        var validItems = await _dataverseService.RetrieveMultipleAsync(validItemsQuery);
-        var createItems = validItems.Entities
-            .Select(entity => (
-                EntityId: entity.Id,
-                AttemptCount: entity.GetAttributeValue<int?>(processingAttemptCountColumnName) ?? 0,
-                Payload: new RequestJobCreateItem
-                {
-                    ItemId = entity.Id,
-                    SsuId = entity.GetAttributeValue<string>(ssuIdColumnName) ?? string.Empty,
-                    SourceType = sourceType,
-                    SourceValue = entity.GetAttributeValue<string>(sourceValueColumnName) ?? string.Empty,
-                }))
-            .Where(item => !string.IsNullOrWhiteSpace(item.Payload.SsuId))
-            .ToList();
-
-        _logger.LogInformation(
-            "Performance.CreateRequestsJobsInput Batch={BulkProcessorId} ValidItemsFromDataverse={ValidItemsCount} CandidateItems={CandidateCount} CorrelationId={CorrelationId}",
-            bulkProcessorId,
-            validItems.Entities.Count,
-            createItems.Count,
-            correlationId);
-
-        var checkCrossBatchDuplicates = GetBooleanFlag("BulkIngestionCheckCrossBatchDuplicates", false);
-        var duplicateFailures = new List<RequestJobCreateResult>();
-        var failedByEntityId = new Dictionary<Guid, RequestJobCreateResult>();
-        var eligibleItems = new List<(Guid EntityId, int AttemptCount, RequestJobCreateItem Payload)>(createItems.Count);
-
-        if (checkCrossBatchDuplicates)
-        {
-            foreach (var item in createItems)
-            {
-                var conflictingBatches = await CrossBatchDuplicateLookupService.FindConflictingBatchesAsync(
-                    _dataverseService,
-                    _logger,
-                    bulkProcessorId,
-                    item.Payload.SsuId,
-                    bulkIngestionItemEntityName,
-                    bulkIngestionItemParentLookupColumnName,
-                    ssuIdColumnName,
-                    bulkProcessorEntityName);
-
-                if (conflictingBatches.Count > 0)
-                {
-                    var duplicateMessage = CrossBatchDuplicateMessageHelper.BuildErrorMessage(conflictingBatches);
-
-                    duplicateFailures.Add(new RequestJobCreateResult
-                    {
-                        Success = false,
-                        SsuId = item.Payload.SsuId,
-                        SourceType = sourceType,
-                        ErrorCode = "ERR_DUP_SSU_OTHER_BATCH",
-                        ErrorMessage = duplicateMessage,
-                        FailureStageCode = Constants.StatusCodes.StageValidation,
-                    });
-
-                    failedByEntityId[item.EntityId] = duplicateFailures[^1];
-                    continue;
-                }
-
-                eligibleItems.Add(item);
-            }
-        }
-        else
-        {
-            eligibleItems.AddRange(createItems);
-        }
-
-        RequestJobBatchResult createResult;
-        if (eligibleItems.Count > 0)
-        {
-            var service = new RequestJobCreationService(_dataverseService, _logger);
-            createResult = await service.CreateBatchAsync(
-                eligibleItems.Select(item => item.Payload),
-                submitUserId,
-                componentName,
-                sourceType,
-                jobTypeId: jobTypeId,
-                createJob: createJob);
-        }
-        else
-        {
-            createResult = new RequestJobBatchResult
-            {
-                Success = false,
-                CreatedCount = 0,
-                FailedCount = 0,
-            };
-        }
-
-        if (duplicateFailures.Count > 0)
-        {
-            createResult.Results.AddRange(duplicateFailures);
-            createResult.FailedCount += duplicateFailures.Count;
-            createResult.Success = false;
-        }
-
-        var requestsCreated = createResult.Results.Count(result => result.Success && result.RequestId != Guid.Empty);
-        var jobsCreated = createResult.Results.Count(result => result.Success && result.JobId != Guid.Empty);
-
-        var outcomeBySsu = createResult.Results
-            .GroupBy(result => result.SsuId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-
-        var updateRequests = new List<OrganizationRequest>();
-        foreach (var item in createItems)
-        {
-            RequestJobCreateResult? outcome = null;
-
-            if (!failedByEntityId.TryGetValue(item.EntityId, out var failureOutcome))
-            {
-                outcomeBySsu.TryGetValue(item.Payload.SsuId, out outcome);
-            }
-            else
-            {
-                outcome = failureOutcome;
-            }
-
-            if (outcome is null)
-            {
-                continue;
-            }
-
-            var updateEntity = new Entity(bulkIngestionItemEntityName, item.EntityId)
-            {
-                [validationStatusColumnName] = outcome.Success ? processedStatus : failedStatus,
-                [validationMessageColumnName] = outcome.Success
-                    ? (createJob ? "Request/job created successfully." : "Request created successfully in Request Only mode.")
-                    : $"{outcome.ErrorCode}: {outcome.ErrorMessage}",
-                [processingStageColumnName] = outcome.Success
-                    ? new OptionSetValue(Constants.StatusCodes.StageCompleted)
-                    : new OptionSetValue(outcome.FailureStageCode ?? Constants.StatusCodes.StageRequestCreation),
-                [processingTimestampColumnName] = DateTime.UtcNow,
-                [processingAttemptCountColumnName] = item.AttemptCount + 1,
-            };
-
-            if (!string.IsNullOrWhiteSpace(processingRunId))
-            {
-                updateEntity[processingRunIdColumnName] = processingRunId;
-            }
-
-            if (outcome.Success)
-            {
-                // Link to the created request via EntityReference lookup
-                var requestEntityName = Environment.GetEnvironmentVariable("SvtRequestEntityLogicalName") ?? "voa_requestlineitem";
-                updateEntity[requestLookupColumnName] = new EntityReference(requestEntityName, outcome.RequestId);
-
-                if (createJob && outcome.JobId != Guid.Empty)
-                {
-                    var jobEntityName = Environment.GetEnvironmentVariable("SvtJobEntityLogicalName") ?? "incident";
-                    updateEntity[jobLookupColumnName] = new EntityReference(jobEntityName, outcome.JobId);
-                }
-            }
-
-            updateRequests.Add(DataverseBulkItemWriter.BuildUpsertRequest(updateEntity));
-        }
-
-        if (updateRequests.Count > 0)
-        {
-            var updateItemsSw = Stopwatch.StartNew();
-            var bulkWriter = new DataverseBulkItemWriter(_dataverseService);
-            await bulkWriter.ExecuteItemRequestsAsync(updateRequests);
-
-            // Refresh parent counters after processing outcomes.
-            var allItemsQuery = new QueryExpression(bulkIngestionItemEntityName)
-            {
-                ColumnSet = new ColumnSet(validationStatusColumnName, "voa_isduplicate"),
-                Criteria = new FilterExpression
-                {
-                    Conditions =
-                    {
-                        new ConditionExpression(bulkIngestionItemParentLookupColumnName, ConditionOperator.Equal, bulkProcessorId),
-                    }
-                }
-            };
-
-            var allItems = await _dataverseService.RetrieveMultipleAsync(allItemsQuery);
-            var recalculatedCounts = CalculateItemCounts(allItems);
-            bulkWriter.UpdateBatchCounters(bulkProcessorId, recalculatedCounts);
-            updateItemsSw.Stop();
-
-            _logger.LogInformation(
-                "Performance.CreateRequestsJobsItemUpdates Batch={BulkProcessorId} UpdateRequests={UpdateRequests} ElapsedMs={ElapsedMs} CorrelationId={CorrelationId}",
-                bulkProcessorId,
-                updateRequests.Count,
-                updateItemsSw.ElapsedMilliseconds,
-                correlationId);
-        }
-
-        createFlowSw.Stop();
-
-        _logger.LogInformation(
-            "Bulk record creation completed for {BulkProcessorId}: Created={CreatedCount}, Failed={FailedCount}, CreateJob={CreateJob}, ProcessingRunId={ProcessingRunId}, CorrelationId={CorrelationId}",
-            bulkProcessorId,
-            createResult.CreatedCount,
-            createResult.FailedCount,
-            createJob,
-            processingRunId,
-            correlationId);
-        _logger.LogInformation(
-            "Performance.CreateRequestsJobsSummary Batch={BulkProcessorId} EligibleItems={EligibleItems} DuplicateRejected={DuplicateRejected} RequestsCreated={RequestsCreated} JobsCreated={JobsCreated} Failed={FailedCount} CreateJob={CreateJob} TotalElapsedMs={TotalElapsedMs} CorrelationId={CorrelationId}",
-            bulkProcessorId,
-            eligibleItems.Count,
-            duplicateFailures.Count,
-            requestsCreated,
-            jobsCreated,
-            createResult.FailedCount,
-            createJob,
-            createFlowSw.ElapsedMilliseconds,
-            correlationId);
-
-        return createResult;
     }
 
     private async Task<TemplateProcessingSettings> ResolveTemplateProcessingSettingsAsync(Entity bulkProcessor)
@@ -1200,7 +1014,7 @@ public sealed class BulkDataRequestProcessor
             FailedItemCount = items.Entities.Count(e =>
             {
                 var status = e.GetAttributeValue<OptionSetValue>(validationStatusColumnName)?.Value.ToString() ?? string.Empty;
-                return status.Equals((Constants.StatusCodes.Failed).ToString(), StringComparison.OrdinalIgnoreCase);
+                return status.Equals((Constants.StatusCodes.ItemFailed).ToString(), StringComparison.OrdinalIgnoreCase);
             }),
         };
 
@@ -1222,7 +1036,209 @@ public sealed class BulkDataRequestProcessor
         return entity.GetAttributeValue<int?>(columnName) ?? 0;
     }
 
+    private async Task TryUpdateProcessingStateAsync(
+        Guid bulkProcessorId,
+        string bulkProcessorEntityName,
+        int? processingStatusValue,
+        DateTime? processingStartedOn,
+        DateTime? processedOn,
+        string? errorSummary,
+        string? correlationId)
+    {
+        try
+        {
+            var update = new Entity(bulkProcessorEntityName, bulkProcessorId)
+            {
+                [BulkProcessingStatusColumn] = processingStatusValue.HasValue
+                    ? new OptionSetValue(processingStatusValue.Value)
+                    : null,
+                [BulkProcessingStartedOnColumn] = processingStartedOn,
+                [BulkProcessedOnColumn] = processedOn,
+                [BulkErrorSummaryColumn] = errorSummary,
+            };
+
+            _dataverseService.Update(update);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not update processing state for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
+                bulkProcessorId,
+                correlationId);
+        }
+    }
+
     private sealed record TemplateProcessingSettings(Guid? JobTypeId, bool CreateJob, bool FromTemplate, string? FormatLabel, int? FormatCode);
+
+    /// <summary>
+    /// Reads an integer environment variable and clamps it to [min, max].
+    /// Logs a warning and returns <paramref name="defaultValue"/> when the value is absent, unparseable, or out of range.
+    /// </summary>
+    private int GetIntConfigValue(string key, int defaultValue, int min = 1, int max = 1000)
+    {
+        var raw = Environment.GetEnvironmentVariable(key);
+        if (raw is null)
+        {
+            return defaultValue;
+        }
+
+        if (!int.TryParse(raw, out var parsed))
+        {
+            _logger.LogWarning(
+                "Configuration key {Key} has an invalid integer value '{Value}'. Using default {Default}.",
+                key, raw, defaultValue);
+            return defaultValue;
+        }
+
+        if (parsed < min || parsed > max)
+        {
+            _logger.LogWarning(
+                "Configuration key {Key} value {Parsed} is out of range [{Min}, {Max}]. Using default {Default}.",
+                key, parsed, min, max, defaultValue);
+            return defaultValue;
+        }
+
+        return parsed;
+    }
+
+    /// <summary>
+    /// Retries <paramref name="operation"/> up to <paramref name="maxRetries"/> times using
+    /// exponential back-off starting at <paramref name="baseDelayMs"/> ms.
+    /// </summary>
+    private async Task<T> RetryWithBackoffAsync<T>(
+        Func<Task<T>> operation,
+        string operationName,
+        int maxRetries,
+        int baseDelayMs,
+        string? correlationId)
+    {
+        var attempt = 0;
+        while (true)
+        {
+            try
+            {
+                return await operation();
+            }
+            catch (Exception ex) when (attempt < maxRetries)
+            {
+                attempt++;
+                var delay = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                _logger.LogWarning(
+                    ex,
+                    "Retry {OperationName} attempt {Attempt}/{MaxRetries}. DelayMs={Delay}. CorrelationId={CorrelationId}",
+                    operationName, attempt, maxRetries, delay, correlationId);
+                await Task.Delay(delay);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Executes a list of <see cref="OrganizationRequest"/>s as multiple smaller
+    /// <see cref="ExecuteMultipleRequest"/> calls (chunks), each retried with exponential back-off.
+    /// Uses <c>ContinueOnError=true</c> per chunk so individual item faults don't abort the chunk.
+    /// </summary>
+    /// <returns>
+    /// A tuple of succeeded request count, failed request count, and error messages for any
+    /// chunk that exhausted retries or returned item-level faults.
+    /// </returns>
+    private async Task<(int SucceededRequests, int FailedRequests, List<string> Errors)> ExecuteMultipleInChunksAsync(
+        List<OrganizationRequest> requests,
+        int chunkSize,
+        int maxRetries,
+        int baseDelayMs,
+        string operationName,
+        string? correlationId)
+    {
+        var succeededRequests = 0;
+        var failedRequests = 0;
+        var errors = new List<string>();
+
+        if (requests.Count == 0)
+        {
+            return (succeededRequests, failedRequests, errors);
+        }
+
+        var total = requests.Count;
+        var totalChunks = (int)Math.Ceiling(total / (double)chunkSize);
+
+        for (var chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++)
+        {
+            var start = chunkIndex * chunkSize;
+            var count = Math.Min(chunkSize, total - start);
+
+            var chunkRequest = new ExecuteMultipleRequest
+            {
+                Settings = new ExecuteMultipleSettings
+                {
+                    ContinueOnError = true,
+                    ReturnResponses = true,
+                },
+                Requests = new OrganizationRequestCollection(),
+            };
+
+            for (var i = 0; i < count; i++)
+            {
+                chunkRequest.Requests.Add(requests[start + i]);
+            }
+
+            var chunkSw = Stopwatch.StartNew();
+            try
+            {
+                var response = await RetryWithBackoffAsync(
+                    async () =>
+                    {
+                        return (ExecuteMultipleResponse)await _dataverseService.ExecuteAsync(chunkRequest);
+                    },
+                    $"{operationName} chunk {chunkIndex + 1}/{totalChunks}",
+                    maxRetries,
+                    baseDelayMs,
+                    correlationId);
+
+                chunkSw.Stop();
+                var chunkFaults = response.Responses
+                    .Where(itemResponse => itemResponse.Fault is not null)
+                    .ToList();
+
+                if (chunkFaults.Count == 0)
+                {
+                    succeededRequests += count;
+                    _logger.LogInformation(
+                        "ExecuteMultiple chunk succeeded. Operation={Operation} Chunk={Chunk}/{Total} Count={Count} ElapsedMs={Elapsed} CorrelationId={CorrelationId}",
+                        operationName, chunkIndex + 1, totalChunks, count, chunkSw.ElapsedMilliseconds, correlationId);
+                    continue;
+                }
+
+                succeededRequests += count - chunkFaults.Count;
+                failedRequests += chunkFaults.Count;
+
+                foreach (var itemResponse in chunkFaults)
+                {
+                    errors.Add(
+                        $"Chunk {chunkIndex + 1}/{totalChunks} request {itemResponse.RequestIndex} failed: {itemResponse.Fault!.Message}");
+                }
+
+                _logger.LogInformation(
+                    "ExecuteMultiple chunk completed with faults. Operation={Operation} Chunk={Chunk}/{Total} Count={Count} Faults={Faults} ElapsedMs={Elapsed} CorrelationId={CorrelationId}",
+                    operationName, chunkIndex + 1, totalChunks, count, chunkFaults.Count, chunkSw.ElapsedMilliseconds, correlationId);
+            }
+            catch (Exception ex)
+            {
+                chunkSw.Stop();
+                failedRequests += count;
+                var errMsg = $"Chunk {chunkIndex + 1}/{totalChunks} failed after {maxRetries} retries: {ex.Message}";
+                errors.Add(errMsg);
+
+                _logger.LogError(
+                    ex,
+                    "ExecuteMultiple chunk failed. Operation={Operation} Chunk={Chunk}/{Total} Count={Count} ElapsedMs={Elapsed} CorrelationId={CorrelationId}",
+                    operationName, chunkIndex + 1, totalChunks, count, chunkSw.ElapsedMilliseconds, correlationId);
+            }
+        }
+
+        return (succeededRequests, failedRequests, errors);
+    }
+
     private static OrganizationRequest UpsertRequest(Guid guid)
     {
         ParameterCollection parameters = new ParameterCollection

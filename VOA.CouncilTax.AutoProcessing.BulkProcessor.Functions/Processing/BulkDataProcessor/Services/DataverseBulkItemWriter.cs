@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
+
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
 
@@ -19,7 +21,7 @@ public sealed class DataverseBulkItemWriter
         _dataverseService = dataverseService;
     }
 
-    public async Task<BulkItemWriteResult> ExecuteItemRequestsAsync(IEnumerable<OrganizationRequest> requests, int batchSize = DefaultBatchSize)
+    public async Task<BulkItemWriteResult> ExecuteItemRequests(IEnumerable<OrganizationRequest> requests, int batchSize = DefaultBatchSize)
     {
         ArgumentNullException.ThrowIfNull(requests);
 
@@ -58,6 +60,7 @@ public sealed class DataverseBulkItemWriter
         return result;
     }
 
+    // update processing status along with counters. This is to ensure the status and counters are always in sync.
     public void UpdateBatchCounters(Guid bulkProcessorId, BulkItemCounts counts)
     {
         ArgumentNullException.ThrowIfNull(counts);
@@ -70,6 +73,7 @@ public sealed class DataverseBulkItemWriter
         var duplicateItemCountColumnName = Environment.GetEnvironmentVariable("BulkProcessorDuplicateItemCountColumnName") ?? "voa_duplicateitemcount";
         var processedItemCountColumnName = Environment.GetEnvironmentVariable("BulkProcessorProcessedItemCountColumnName") ?? "voa_processeditemcount";
         var failedItemCountColumnName = Environment.GetEnvironmentVariable("BulkProcessorFailedItemCountColumnName") ?? "voa_faileditemcount";
+        var processingStatusColumnName = Environment.GetEnvironmentVariable("BulkProcessorProcessingStatusColumnName") ?? "voa_processingstatus";
 
         var updateEntity = new Entity(bulkProcessorEntityName, bulkProcessorId)
         {
@@ -79,6 +83,7 @@ public sealed class DataverseBulkItemWriter
             [duplicateItemCountColumnName] = counts.DuplicateItemCount,
             [processedItemCountColumnName] = counts.ProcessedItemCount,
             [failedItemCountColumnName] = counts.FailedItemCount,
+            [processingStatusColumnName] = new OptionSetValue(StatusCodes.ProcessingStatusProcessing),
         };
 
         _dataverseService.Update(updateEntity);

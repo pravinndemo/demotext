@@ -52,7 +52,7 @@ Steps:
 
 Final ingestion status resolution:
 - all success -> `Completed` (`358800009`)
-- failures with `CanReprocess=true` remaining -> `Delayed` (`358800004`)
+- failures with `CanReprocess=true` remaining -> `PartialSuccess` (`358800003`)
 - all failed (non-reprocessable) -> `Failed` (`358800012`)
 - mixed without reprocessable backlog -> `PartialSuccess` (`358800003`)
 
@@ -176,7 +176,7 @@ Transient/permanent handling:
 - Retry exhaustion now classifies exceptions as transient/permanent.
 - Transient exhaustion leaves `voa_canreprocess=true`.
 - Permanent exhaustion sets `voa_canreprocess=false`.
-- Ingestion is finalized to `Delayed` when failed+reprocessable items still exist.
+- Ingestion is finalized to `PartialSuccess` when failed+reprocessable items still exist.
 
 What retry does not guarantee:
 - A permanently failing item may still fail after all retries and is then marked failed.

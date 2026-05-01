@@ -25,7 +25,7 @@ So we split responsibilities:
 - `BulkDataRequestProcessor`:
   - request validation and orchestration
   - status gate checks
-  - action-specific flow (`SaveItems`, `SubmitBatch`, `SVT_SINGLE`)
+  - action-specific flow (`SaveItems`, `SubmitBatch`, `SVT_TRACKING`)
 - `BulkDataRouteDecisionBuilder`:
   - payload-shape routing only
 
@@ -46,7 +46,7 @@ Intent mapping:
 - `submit-batch`:
   - final submit of a `Draft` batch, create requests for valid items, then move to `Queued`
 - `svt-single`:
-  - direct single-item request path outside bulk batch staging
+  - tracking-row dispatch outside bulk batch staging
 
 ## Current behavior in processor
 
@@ -58,14 +58,15 @@ The processor currently does these steps:
 
 2. Determine route mode by payload shape
 - Uses `BulkDataRouteDecisionBuilder`
-- Modes: `BULK_SELECTION`, `BULK_FILE`, `SVT_SINGLE`
+- Modes: `BULK_SELECTION`, `BULK_FILE`, `SVT_TRACKING`
 
 3. Validate endpoint vs route mode
 - SVT endpoint accepts only SVT payload
 - Bulk endpoints reject SVT payload
 
 4. SVT path
-- Creates a request immediately and, when applicable, creates the incident directly in the Azure Function
+- Loads the SVT tracking row and creates the request/job for tracking payloads
+- Uses the tracking row's user id as the owning user context, while bulk request/job ownership still follows the bulk assignment on the staged item
 
 5. Bulk path
 - Requires `bulkProcessorId`
@@ -83,6 +84,7 @@ The processor currently does these steps:
   - accepted for final submit
   - creates requests for valid items
   - for `Request and Job(s)`, creates the incident directly and then performs a bypassed follow-up request update to avoid duplicate plugin firing
+  - sets request and job ownership from the bulk item's assigned team or manager, not from the submitter alone
   - updates parent batch `Draft -> Queued`
 
 ## Important business rule (delete behavior)

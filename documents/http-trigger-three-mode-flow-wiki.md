@@ -6,17 +6,17 @@ This page explains how I want the HTTP-triggered Azure Function to behave for al
 
 - Bulk selection from Hereditament PCF
 - Bulk file upload from Hereditament PCF
-- SVT single-item request from SVT PCF (outside bulk)
+- SVT tracking request from SVT PCF (outside bulk) using the same `svt-single` route
 
 ## Why I am doing this
 
-I want explicit endpoints for each intent so callers do not depend on action strings in payload.
+I want explicit bulk endpoints and a single shared SVT tracking route so callers do not depend on action strings in payload.
 I still keep shared routing logic based on payload shape within the function implementation.
 
 At the same time, I want strict separation in behavior:
 
 - Bulk = staging plus submit-driven request creation
-- SVT = direct single request/job creation flow
+- SVT = tracking-row-driven request/job creation flow with status polling
 
 ## Components in the call chain
 
@@ -73,7 +73,7 @@ This section is the final agreed behavior for bulk batches.
 |---|---|---|---|---|
 | Save batch items | `POST /bulk-data/save-items` | PCF selection step or CSV save button via Custom API/APIM | Bulk payload (`bulkProcessorId` + selection ids or file context) | No |
 | Final batch submit | `POST /bulk-data/submit-batch` | Final manual submit via Custom API/APIM | Bulk payload (`bulkProcessorId` with staged items already present) | No |
-| SVT single processing | `POST /bulk-data/svt-single` | SVT caller via Custom API/APIM | SVT payload (`ssuid` + `userId` + `componentName`) | No |
+| SVT tracking processing | `POST /bulk-data/svt-single` | SVT caller via Custom API/APIM | Tracking payload (`svtProcessingId`) | No |
 
 These are the only supported routes for this first-time implementation.
 
@@ -170,22 +170,22 @@ Important:
 - Same as selection for staging
 - Submit processing creates requests and, for `Request and Job(s)`, creates the incident directly in the Azure Function
 
-### 3) SVT single mode
+### 3) SVT tracking mode
 
 Request carries:
 
-- `ssuid`
-- `userId`
-- `componentName`
+- `svtProcessingId`
 
 Expected behavior:
 
-- Validate single SSUID and caller context
-- Bypass bulk tables (`Bulk Ingestion` and `Bulk Ingestion Item`)
-- Trigger direct request creation path for one item
+- Load the SVT tracking row for dispatch
+- Use the dedicated SVT tracking row, not the bulk tables
+- Set the tracking row to `Queued` / `Requested`
+- Trigger request creation for one item
 - Persist `componentName` into request metadata for traceability
 - Link the created request and incident directly from the Azure Function
-- Return accepted/direct response for single processing
+- Update the tracking row with `requestId`, `jobId`, and final status
+- Return accepted response for tracking processing
 
 ## Routing matrix
 
@@ -193,7 +193,7 @@ I will use this exact matrix:
 
 - `bulkProcessorId + ssuIds[]` => `BULK_SELECTION`
 - `bulkProcessorId` only => `BULK_FILE`
-- `ssuid + userId + componentName` => `SVT_SINGLE`
+- `svtProcessingId` => `SVT_TRACKING`
 - Anything else => `400 Bad Request`
 
 ## Response behavior
@@ -234,7 +234,9 @@ I want to keep these boundaries stable:
 - HTTP trigger owns contract validation and route selection
 - Bulk staging remains in HTTP flow
 - Bulk final request creation occurs in `SubmitBatch`
-- Bulk and SVT job creation both use direct incident creation inside the Azure Function
+- Bulk job creation uses direct incident creation inside the Azure Function
+- Bulk request and job ownership follow the bulk item's assigned team or manager
+- SVT uses a separate tracking row, async plug-in dispatch, and status polling from PCF
 
 ## First implementation step
 
