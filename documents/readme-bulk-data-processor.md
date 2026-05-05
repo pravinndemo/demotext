@@ -118,6 +118,10 @@ Used services/classes:
 - processor extracted to separate file/folder
 - action enum (`BulkRequestAction`)
 
+## Related notes
+
+- [Bulk Processor Resilience Notes](c:/dev/demotext/documents/bulk-processor-resilience-notes.md)
+
 ## What is next
 
 To make the processor fully functional end-to-end:

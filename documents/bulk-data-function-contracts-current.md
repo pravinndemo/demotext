@@ -103,6 +103,7 @@ If `BulkSubmitCreateImmediately=true`:
 - Requires valid submit user.
 - Requires resolved job type.
 - Creates request/job records for valid items and updates item outcomes.
+- If no billing authority can be resolved for an SSU, request creation fails the row with `NO_PROPOSED_BILLING_AUTHORITY` and the item/tracking row is marked failed. This is treated as a permanent failure, so it is not retried.
 
 Status transition:
 - Attempts `Draft -> Queued` (`statuscode = 358800002`).

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Collections.Generic;
 using Microsoft.Extensions.Logging;
 using Microsoft.PowerPlatform.Dataverse.Client;
 using System.Text.Json;
@@ -10,6 +11,14 @@ namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkD
 
 public sealed partial class BulkDataRequestProcessor
 {
+    private static readonly HashSet<string> SvtRequestCreationNonRetryableErrorCodes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ERROR_PROPOSED_SSU",
+        "INVALID_SSU_FORMAT",
+        "INVALID_USER_FORMAT",
+        "JOB_TYPE_NOT_FOUND",
+    };
+
     private async Task<IActionResult> HandleSvtTrackingAsync(BulkDataRouteDecisionRequest request)
     {
         var svtProcessingId = request.SvtProcessingId ?? Guid.Empty;
@@ -150,11 +159,14 @@ public sealed partial class BulkDataRequestProcessor
 
                     if (!requestResult.Success)
                     {
+                        var isRetryable = !SvtRequestCreationNonRetryableErrorCodes.Contains(
+                            requestResult.ErrorCode ?? string.Empty);
+
                         await _svtTrackingService.MarkFailedAsync(
                             trackingRecord.Id,
                             requestResult.ErrorCode ?? "SVT_REQUEST_FAILED",
                             requestResult.ErrorMessage ?? "SVT request creation failed.",
-                            isRetryable: true,
+                            isRetryable: isRetryable,
                             correlationId);
 
                         return new ObjectResult(BuildSvtTrackingResponse(

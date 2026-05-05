@@ -143,7 +143,7 @@ Azure Function should exit without creating duplicates when any of these are alr
 | SVT row cannot be read | Function returns a server error | `SVT_TRACKING_LOOKUP_FAILED` |
 | `voa_dispatchstate` is not `Requested` or `ReRequested` | Processing is blocked | `SVT_DISPATCH_NOT_REQUESTED` |
 | `voa_ssuid`, `voa_userid`, or `voa_componentname` is missing | SVT row is marked failed | `voa_status = Failed`, `voa_errorcode = INVALID_SVT_REQUEST`, `voa_isretryable = false` |
-| Request creation fails | SVT row is marked failed | `voa_status = Failed`, `voa_errorcode` and `voa_errormessage` are set, `voa_isretryable = true` |
+| Request creation fails | SVT row is marked failed | `voa_status = Failed`, `voa_errorcode` and `voa_errormessage` are set, `voa_isretryable = false` for non-retryable request errors such as `NO_PROPOSED_BILLING_AUTHORITY`, `INVALID_SSU_FORMAT`, `INVALID_USER_FORMAT`, and `JOB_TYPE_NOT_FOUND`; otherwise `true` |
 | Job creation fails or any unexpected exception occurs | SVT row is marked failed | `voa_status = Failed`, `voa_errorcode = SVT_JOB_FAILED`, `voa_isretryable = true` |
 | SVT row is already `Processing` | Function accepts but does not duplicate work | `SVT_ALREADY_PROCESSING` |
 | SVT row is already `Completed` | Function accepts but does not duplicate work | `SVT_ALREADY_PROCESSED` |

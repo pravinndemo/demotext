@@ -310,21 +310,14 @@ var requestStatusColumnName =
             var entityForBillingAuthority =
                 RetrieveBAReference(ssuIdGuid).GetAwaiter().GetResult();
 
-            EntityReference relatedBillingAuthorityLinkRef = null;
-            EntityReference proposedBillingAuthorityRef = null;
-            string baReferenceNumber = string.Empty;
+            var relatedBillingAuthorityLinkRef =
+                entityForBillingAuthority.GetAttributeValue<EntityReference>("voa_relatedbillingauthoritylinkid") ?? null;
 
-            if (entityForBillingAuthority != null)
-            {
-                relatedBillingAuthorityLinkRef =
-                    entityForBillingAuthority.GetAttributeValue<EntityReference>("voa_relatedbillingauthoritylinkid") ?? null;
+            var proposedBillingAuthorityRef =
+                entityForBillingAuthority.GetAttributeValue<EntityReference>("voa_proposedbillingauthorityid") ?? null;
 
-                proposedBillingAuthorityRef =
-                    entityForBillingAuthority.GetAttributeValue<EntityReference>("voa_proposedbillingauthorityid") ?? null;
-
-                baReferenceNumber =
-                    entityForBillingAuthority.GetAttributeValue<string>("voa_bareferencenumber") ?? string.Empty;
-            }
+            var baReferenceNumber =
+                entityForBillingAuthority.GetAttributeValue<string>("voa_bareferencenumber") ?? string.Empty;
 
             var requestTypeColumnName =
                 Environment.GetEnvironmentVariable("RequestRequestTypeLookupColumnName") ?? "voa_requesttypeid";
@@ -364,8 +357,16 @@ var requestStatusColumnName =
             var requestNameColumnName =
                 Environment.GetEnvironmentVariable("RequestNameColumnName") ?? "voa_name";
 
+            if (proposedBillingAuthorityRef is null)
+            {
+                return Fail(
+                    "ERROR_PROPOSED_SSU",
+                    "Cannot create requests with proposed SSUID.",
+                    StatusCodes.StageRequestCreation);
+            }
+
             string name =
-                GenerateRequestName(jobTypeId, ssuIdGuid, proposedBillingAuthorityRef.Id)
+                GenerateRequestName(jobTypeId, ssuIdGuid, proposedBillingAuthorityRef)
                     .GetAwaiter()
                     .GetResult();
 
@@ -609,7 +610,7 @@ var requestStatusColumnName =
         return Environment.GetEnvironmentVariable("BypassBusinessLogicExecutionModes") ?? "CustomSync,CustomAsync";
     }
 
-    private async Task<string> GenerateRequestName(Guid jobTypeId, Guid ssuId, Guid proposedBillingAuthorityId)
+    private async Task<string> GenerateRequestName(Guid jobTypeId, Guid ssuId, EntityReference proposedBillingAuthorityRef)
     {
         _logger.LogInformation("Generating voa_name value for record");
 
@@ -635,11 +636,11 @@ var requestStatusColumnName =
         }
 
         //EntityReference proposedBillingAuthorityER = requestLineItem.GetAttributeValue<EntityReference>("voa_proposedbillingauthorityid");
-        if (proposedBillingAuthorityId != Guid.Empty)
+        if (proposedBillingAuthorityRef != null && proposedBillingAuthorityRef.Id != Guid.Empty)
         {
             proposedBillingAuthority = await _dataverseService.RetrieveAsync(
                 "account",
-                proposedBillingAuthorityId,
+                proposedBillingAuthorityRef.Id,
                 new ColumnSet("name"));
         }
 
