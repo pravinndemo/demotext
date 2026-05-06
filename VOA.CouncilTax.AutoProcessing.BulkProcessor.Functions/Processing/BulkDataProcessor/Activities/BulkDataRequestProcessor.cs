@@ -147,7 +147,15 @@ public sealed partial class BulkDataRequestProcessor
             bulkProcessor = _dataverseService.Retrieve(
                 bulkProcessorEntityName,
                 request.BulkProcessorId,
-                new ColumnSet(statusColumnName, customStatusColumnName, totalRowsColumnName, validItemCountColumnName, "voa_processingjobtype", "voa_template"));
+                new ColumnSet(
+                    statusColumnName,
+                    customStatusColumnName,
+                    totalRowsColumnName,
+                    validItemCountColumnName,
+                    "voa_name",
+                    "voa_batchreference",
+                    "voa_processingjobtype",
+                    "voa_template"));
         }
         catch (Exception ex)
         {
@@ -160,10 +168,12 @@ public sealed partial class BulkDataRequestProcessor
                 BulkProcessorId = request.BulkProcessorId,
                 CorrelationId = request.CorrelationId,
             })
-            {
-                StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError,
-            };
+        {
+            StatusCode = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError,
+        };
         }
+
+        await SyncBatchNameFromReferenceAsync(bulkProcessorEntityName, bulkProcessor);
 
         // Both SaveItems and SubmitBatch are only allowed while the batch is still Draft.
         var currentStatus = GetFormattedValueOrEmpty(bulkProcessor, customStatusColumnName);
@@ -546,7 +556,7 @@ public sealed partial class BulkDataRequestProcessor
         existingLookupSw.Stop();
 
         var existingBySSUId = existingItems.Entities.ToDictionary(
-            e => e.GetAttributeValue<string>(ssuIdColumnName) ?? string.Empty,
+            e => e.GetAttributeValue<EntityReference>(ssuIdColumnName)?.Id.ToString() ?? string.Empty,
             e => e);
 
         _logger.LogInformation(
@@ -1066,6 +1076,36 @@ public sealed partial class BulkDataRequestProcessor
                 "Could not update processing state for batch {BulkProcessorId}. CorrelationId: {CorrelationId}",
                 bulkProcessorId,
                 correlationId);
+        }
+    }
+
+    private async Task SyncBatchNameFromReferenceAsync(string bulkProcessorEntityName, Entity bulkProcessor)
+    {
+        try
+        {
+            var batchName = bulkProcessor.GetAttributeValue<string>(EntityFields.BulkIngestionFields.Name)?.Trim();
+            var batchReference = bulkProcessor.GetAttributeValue<string>(EntityFields.BulkIngestionFields.BatchReference)?.Trim();
+
+            if (string.IsNullOrWhiteSpace(batchReference) || string.Equals(batchName, batchReference, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var update = new Entity(bulkProcessorEntityName, bulkProcessor.Id)
+            {
+                [EntityFields.BulkIngestionFields.Name] = batchReference,
+            };
+
+            _dataverseService.Update(update);
+
+            bulkProcessor[EntityFields.BulkIngestionFields.Name] = batchReference;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not sync batch name from batch reference for batch {BulkProcessorId}.",
+                bulkProcessor.Id);
         }
     }
 

@@ -19,6 +19,8 @@ public static class EntityFields
     {
         public const string Id = "voa_bulkingestionid";
         public const string Name = "voa_name";
+        public const string BatchReference = "voa_batchreference";
+        public const string DelayProcessingUntil = "voa_delayprocessinguntil";
         public const string Status = "statuscode";
         public const string Source = "voa_source";
         public const string SourceFile = "voa_sourcefile";

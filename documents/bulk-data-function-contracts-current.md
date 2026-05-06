@@ -117,6 +117,8 @@ Trigger:
 
 Behavior:
 - Loads queued ingestions (`statuscode=Queued`).
+- Ignores any batch where `voa_DelayProcessingUntil` is set in the future.
+- If `voa_DelayProcessingUntil` is blank or already due, the batch is eligible for pickup.
 - Processes valid items in batches.
 - Applies retry policy and per-item state tracking.
 - Finalizes ingestion to `Completed`, `PartialSuccess`, or `Failed`.

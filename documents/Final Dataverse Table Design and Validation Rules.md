@@ -367,7 +367,7 @@ If needed, keep columns but hide them from forms/views as an intermediate step.
 | Status | Editable? | Notes |
 |---|---|---|
 | Draft | Yes | User can update header fields |
-| Queued | No | Lock business fields |
+| Queued | No | Lock business fields, except `voa_DelayProcessingUntil` for support reschedule |
 | Processing | No | Read-only |
 | Completed | No | Read-only |
 | Failed | Limited / admin only | Recovery actions only |

@@ -117,6 +117,21 @@ Azure Function should exit without creating duplicates when any of these are alr
 - `voa_requestid` already exists on the SVT row
 - an active request/job already exists for the same SSU and business context
 
+### 4.4 Validation before request or job creation
+
+The SVT function validates the tracking row before it creates a request or job.
+
+It checks:
+
+- the SVT tracking row can be read
+- `voa_dispatchstate` is `Requested` or `ReRequested`
+- `voa_ssuid`, `voa_userid`, and `voa_componentname` are present
+- the SVT row is not already `Processing`
+- the SVT row is not already `Completed`
+- an active request or job does not already exist for the same SSU and business context
+
+If any of these checks fail, the function marks the SVT row as failed or exits without creating duplicate work, depending on the condition.
+
 ## 5. Flow
 
 ### 5.1 Happy path
@@ -126,7 +141,7 @@ Azure Function should exit without creating duplicates when any of these are alr
 3. PCF sets `voa_status = Queued`.
 4. Dataverse async plug-in fires on `voa_dispatchstate`.
 5. Plug-in calls `POST /bulk-data/svt-single`.
-6. Azure Function reads the SVT row and validates that required fields are present.
+6. Azure Function reads the SVT row and validates the dispatch state, required fields, and current processing state.
 7. Azure Function sets `voa_status = Processing`.
 8. Azure Function creates the request record.
 9. Azure Function writes `voa_requestid` and sets `voa_status = RequestCreated` when the request is newly created.

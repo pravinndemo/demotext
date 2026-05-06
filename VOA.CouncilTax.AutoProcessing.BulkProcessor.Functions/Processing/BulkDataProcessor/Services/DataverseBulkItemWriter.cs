@@ -60,7 +60,7 @@ public sealed class DataverseBulkItemWriter
         return result;
     }
 
-    // update processing status along with counters. This is to ensure the status and counters are always in sync.
+    // Update the processing status along with counters once the batch work for the current action has completed.
     public void UpdateBatchCounters(Guid bulkProcessorId, BulkItemCounts counts)
     {
         ArgumentNullException.ThrowIfNull(counts);
@@ -83,7 +83,7 @@ public sealed class DataverseBulkItemWriter
             [duplicateItemCountColumnName] = counts.DuplicateItemCount,
             [processedItemCountColumnName] = counts.ProcessedItemCount,
             [failedItemCountColumnName] = counts.FailedItemCount,
-            [processingStatusColumnName] = new OptionSetValue(StatusCodes.ProcessingStatusProcessing),
+            [processingStatusColumnName] = new OptionSetValue(StatusCodes.ProcessingStatusProcessed),
         };
 
         _dataverseService.Update(updateEntity);

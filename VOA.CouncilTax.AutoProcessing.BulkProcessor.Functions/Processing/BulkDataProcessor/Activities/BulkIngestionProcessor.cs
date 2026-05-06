@@ -57,7 +57,7 @@ public class BulkIngestionProcessor
     {
         var runSw = Stopwatch.StartNew();
         var processingRunId = Guid.NewGuid().ToString("N");
-        // Only parent batches in Queued or PartialSuccess are eligible for timer pickup.
+        // Only parent batches in Queued or PartialSuccess are candidates for timer pickup.
         List<Entity> submittedIngestions = await RetrieveSubmittedIngestionsAsync();
 
         if (!submittedIngestions.Any())
@@ -70,9 +70,21 @@ public class BulkIngestionProcessor
 
         var processedIngestions = 0;
         var failedIngestions = 0;
+        var skippedIngestions = 0;
 
         foreach (Entity ingestion in submittedIngestions)
         {
+            if (IsDeferredByDelayWindow(ingestion, out var delayProcessingUntil))
+            {
+                var delayUntilText = delayProcessingUntil?.ToString("o") ?? "n/a";
+                _logger.LogInformation(
+                    "Skipping Bulk Ingestion [{Id}] until {DelayProcessingUntil}.",
+                    ingestion.Id,
+                    delayUntilText);
+                skippedIngestions++;
+                continue;
+            }
+
             try
             {
                 await TryUpdateIngestionProcessingStateAsync(
@@ -113,10 +125,11 @@ public class BulkIngestionProcessor
 
         runSw.Stop();
         _logger.LogInformation(
-            "Performance.TimerRunSummary ProcessingRunId={ProcessingRunId} SubmittedIngestions={SubmittedIngestions} ProcessedIngestions={ProcessedIngestions} FailedIngestions={FailedIngestions} TotalElapsedMs={TotalElapsedMs}",
+            "Performance.TimerRunSummary ProcessingRunId={ProcessingRunId} SubmittedIngestions={SubmittedIngestions} ProcessedIngestions={ProcessedIngestions} SkippedIngestions={SkippedIngestions} FailedIngestions={FailedIngestions} TotalElapsedMs={TotalElapsedMs}",
             processingRunId,
             submittedIngestions.Count,
             processedIngestions,
+            skippedIngestions,
             failedIngestions,
             runSw.ElapsedMilliseconds);
     }
@@ -535,10 +548,10 @@ public class BulkIngestionProcessor
                     errorMessage: null,
                     canReprocess: true);
 
-                // Read the item's SSU ID and parent ingestion ID from the already-fetched entity attributes.
-                // Trim handles any whitespace. Falls back to empty/Guid.Empty if the attribute is null.
-                // e.g. Item-A: ssuId = "SSU-001", parentIngestionId = Guid("abc-123")
-                var ssuId = item.GetAttributeValue<string>(ItemSsuIdColumn)?.Trim() ?? string.Empty;
+                // Read the item's SSU lookup and parent ingestion ID from the already-fetched entity attributes.
+                // ItemSsuIdColumn is a lookup, so use EntityReference and convert the GUID to a string for downstream duplicate checks.
+                // e.g. Item-A: ssuId = "4f2c...", parentIngestionId = Guid("abc-123")
+                var ssuId = item.GetAttributeValue<EntityReference>(ItemSsuIdColumn)?.Id.ToString() ?? string.Empty;
                 var parentIngestionId = item.GetAttributeValue<EntityReference>(ItemParentLookupColumn)?.Id ?? Guid.Empty;
 
                 // Three-part duplicate guard — Dataverse is only queried if the first two conditions pass:
@@ -921,7 +934,13 @@ public class BulkIngestionProcessor
     {
         var query = new QueryExpression("voa_bulkingestion")
         {
-            ColumnSet = new ColumnSet("statuscode", "ownerid", "createdby", "voa_processingjobtype", "voa_template")
+            ColumnSet = new ColumnSet(
+                "statuscode",
+                "ownerid",
+                "createdby",
+                "voa_processingjobtype",
+                "voa_template",
+                EntityFields.BulkIngestionFields.DelayProcessingUntil)
         };
 
         // The timer is re-entrant: it continues batches that are still queued or partially complete.
@@ -931,6 +950,12 @@ public class BulkIngestionProcessor
 
         var result = await _crmService.RetrieveMultipleAsync(query);
         return result.Entities.ToList();
+    }
+
+    private bool IsDeferredByDelayWindow(Entity ingestion, out DateTime? delayProcessingUntil)
+    {
+        delayProcessingUntil = ingestion.GetAttributeValue<DateTime?>(EntityFields.BulkIngestionFields.DelayProcessingUntil);
+        return delayProcessingUntil.HasValue && delayProcessingUntil.Value > DateTime.UtcNow;
     }
 
     private EntityReference? ResolveItemOwnerReference(

@@ -24,14 +24,29 @@ The current code uses these checks:
 
 The default job type used in this flow is `Data Enhancement` when no job type is explicitly supplied.
 
+## 3. Validation Before Request Or Job Creation
+
+The SVT flow validates the tracking row before it creates a request or job.
+
+These checks run first:
+
+- the SVT tracking row can be read
+- `voa_dispatchstate` is `Requested` or `ReRequested`
+- `voa_ssuid`, `voa_userid`, and `voa_componentname` are present
+- the SVT row is not already `Processing`
+- the SVT row is not already `Completed`
+- an active request or job does not already exist for the same SSU and business context
+
+If a check fails, the flow stops or marks the SVT row as failed, depending on the condition.
+
 Relevant implementation:
 
 - [`RequestJobCreationService.cs`](c:/dev/demotext/VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions/Processing/BulkDataProcessor/Services/RequestJobCreationService.cs)
 - [`DirectJobCreationService.cs`](c:/dev/demotext/VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions/Processing/BulkDataProcessor/Services/DirectJobCreationService.cs)
 
-## 3. Happy Path Scenarios
+## 4. Happy Path Scenarios
 
-### 3.1 No existing request or job
+### 4.1 No existing request or job
 
 1. SVT tracking row is accepted.
 2. Function marks the SVT row `Processing`.
@@ -46,7 +61,7 @@ Outcome:
 - one job created
 - SVT row completes successfully
 
-### 3.2 Existing active request, no job yet
+### 4.2 Existing active request, no job yet
 
 1. `CreateRequestOnlyAsync(...)` detects `ACTIVE_REQUEST_PRESENT`.
 2. SVT tries to recover the existing active request by SSU and component name.
@@ -60,7 +75,7 @@ Outcome:
 - one job either reused or created
 - SVT row completes successfully
 
-### 3.3 Existing active job already linked to the request
+### 4.3 Existing active job already linked to the request
 
 1. SVT sees the request already exists.
 2. SVT checks the request for an existing job link.
@@ -72,7 +87,7 @@ Outcome:
 - no duplicate job
 - SVT row completes successfully
 
-### 3.4 Existing active job for the same SSU and job type, but not linked to the request
+### 4.4 Existing active job for the same SSU and job type, but not linked to the request
 
 1. Request creation succeeds or the existing request is reused.
 2. Direct job creation checks for an active job with the same SSU and coded reason/job type.
@@ -85,20 +100,22 @@ Outcome:
 - request is linked to the existing active job
 - SVT row completes successfully
 
-## 4. Unhappy Path Scenarios
+## 5. Unhappy Path Scenarios
 
-### 4.1 Missing or invalid SVT input
+### 5.1 Missing or invalid SVT input
 
 - missing `svtProcessingId`
 - missing `ssuId`
 - missing `userId`
 - missing `componentName`
+- invalid dispatch state
+- row already `Processing` or `Completed`
 
 Outcome:
 
 - request is rejected or the SVT row is marked failed
 
-### 4.2 Active request exists for the same SSU and job type
+### 5.2 Active request exists for the same SSU and job type
 
 - request creation returns `ACTIVE_REQUEST_PRESENT`
 - SVT tries to resolve the existing request
@@ -109,7 +126,7 @@ Outcome:
 - no duplicate request is created
 - processing may stop if the existing request cannot be reused
 
-### 4.3 Request creation fails
+### 5.3 Request creation fails
 
 - Dataverse request create throws
 - SVT row is marked failed
@@ -120,7 +137,7 @@ Outcome:
 - no job
 - SVT row ends in `Failed`
 
-### 4.4 Job creation fails
+### 5.4 Job creation fails
 
 - request exists
 - job create throws or Dataverse rejects the write
@@ -131,7 +148,7 @@ Outcome:
 - request may already exist
 - job may not be created
 
-## 5. Bulk Processor Parity
+## 6. Bulk Processor Parity
 
 Yes, the bulk processor uses the same duplicate checks.
 
@@ -148,7 +165,7 @@ The difference is only the input shape:
 - SVT is one tracking row at a time
 - bulk is a batch of items processed through the same service
 
-## 6. Practical Result
+## 7. Practical Result
 
 If you see an existing active job for the same SSU and `Data Enhancement`, the current code should reuse it instead of creating a new one.
 
@@ -159,4 +176,3 @@ If you want stricter behavior, the next step would be to change the job dedupe r
 to:
 
 - same SSU only
-

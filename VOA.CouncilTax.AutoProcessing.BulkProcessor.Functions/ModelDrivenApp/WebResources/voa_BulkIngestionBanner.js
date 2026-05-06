@@ -14,6 +14,7 @@ VOA.BulkIngestionBanner = (function () {
         submittedOn: "voa_submittedon",
         processingStartedOn: "voa_processingstartedon",
         processedOn: "voa_processedon",
+        delayProcessingUntil: "voa_delayprocessinguntil",
         errorSummary: "voa_errorsummary"
     };
 
@@ -41,11 +42,14 @@ VOA.BulkIngestionBanner = (function () {
     function onLoad(executionContext) {
         var formContext = executionContext.getFormContext();
         registerHandlers(formContext);
+        syncQueuedDelayEditability(formContext);
         updateBanner(formContext);
     }
 
     function onFieldChange(executionContext) {
-        updateBanner(executionContext.getFormContext());
+        var formContext = executionContext.getFormContext();
+        syncQueuedDelayEditability(formContext);
+        updateBanner(formContext);
     }
 
     function registerHandlers(formContext) {
@@ -54,6 +58,7 @@ VOA.BulkIngestionBanner = (function () {
         addOnChange(formContext, fields.submittedOn);
         addOnChange(formContext, fields.processingStartedOn);
         addOnChange(formContext, fields.processedOn);
+        addOnChange(formContext, fields.delayProcessingUntil);
         addOnChange(formContext, fields.errorSummary);
     }
 
@@ -92,6 +97,29 @@ VOA.BulkIngestionBanner = (function () {
         } else {
             stopPolling();
         }
+    }
+
+    function syncQueuedDelayEditability(formContext) {
+        if (!formContext) {
+            return;
+        }
+
+        var statusValue = getChoiceValue(formContext, fields.statusCode);
+        var delayAttribute = formContext.getAttribute(fields.delayProcessingUntil);
+        if (!delayAttribute || !delayAttribute.controls) {
+            return;
+        }
+
+        var shouldLockDelay = statusValue === statusCode.Processing
+            || statusValue === statusCode.PartialSuccess
+            || statusValue === statusCode.Completed
+            || statusValue === statusCode.Failed;
+
+        delayAttribute.controls.forEach(function (control) {
+            if (control && typeof control.setDisabled === "function") {
+                control.setDisabled(shouldLockDelay);
+            }
+        });
     }
 
     function buildBannerModel(formContext) {
