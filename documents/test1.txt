@@ -1,0 +1,131 @@
+Hi Microsoft Support Team,
+
+We are raising this request to get assistance with an issue we are facing during managed solution deployment involving a custom page inside a model-driven app.
+
+Background
+
+We have two delivery teams working on the same model-driven app. Due to delivery timelines, release planning, and ownership boundaries, we had to follow a two-solution approach.
+
+The two managed solutions involved are:
+
+Solution| Purpose
+"VOA_Release_Solution"| Main release solution used by one team
+"VOA_SVT_DynamicsRelease_Solution"| SVT-specific solution used by the SVT team
+
+The model-driven app and sitemap are shared between both teams. However, the other components are mostly separate and team-specific.
+
+The affected custom page is:
+
+"VOA CT Sales Verification Tool"
+
+Why Two Solutions Are Used
+
+The two-solution approach was considered because of timeline and delivery constraints. Both teams needed to deliver changes independently, but they are using the same model-driven app shell.
+
+Only the following components are shared:
+
+- Model-driven app
+- Sitemap
+
+The remaining components are different between the teams.
+
+Deployment Details
+
+The deployment order was:
+
+1. "VOA_Release_Solution" was deployed on Monday.
+2. "VOA_SVT_DynamicsRelease_Solution" version "2.0.0.157" was deployed today.
+
+The previous SVT solution version was:
+
+"VOA_SVT_DynamicsRelease_Solution" version "2.0.0.151"
+
+Our expectation was that after deploying "VOA_SVT_DynamicsRelease_Solution" version "2.0.0.157", the target environment would receive the latest version of the SVT custom page.
+
+Issue Observed
+
+After the deployment, the latest custom page changes are not visible in the target environment.
+
+We observed the following:
+
+- In the source environment, the custom page has around 12 versions.
+- In the target environment, the same custom page has only around 7 versions.
+
+This suggests that the latest custom page versions are not being moved to the target environment through the managed solution deployment.
+
+Solution Layer Observation
+
+We checked the solution layers for the custom page "VOA CT Sales Verification Tool".
+
+The custom page has layers from both managed solutions:
+
+Order| Solution
+2| "VOA_Release_Solution"
+1| "VOA_SVT_DynamicsRelease_Solution"
+
+This indicates that both solutions are contributing layers for the same custom page.
+
+We are not sure whether the issue is caused by solution layering, model-driven app publishing, sitemap merge behaviour, or the custom page version not being included correctly in the managed solution export.
+
+AppModule / Model-Driven App Observation
+
+We also inspected the model-driven app XML/AppModule metadata. The custom pages appear to be referenced inside the model-driven app as applets using "canvasappid".
+
+Example pattern observed:
+
+<applets>
+  <applet uniquename="...canvasappid...">
+    <canvasappid>
+      <name>...</name>
+    </canvasappid>
+  </applet>
+</applets>
+
+Because of this, we suspect the issue may not only be with the custom page component itself. It may also be related to the model-driven app/AppModule metadata that references the custom page.
+
+What We Have Tried / Checked
+
+We have already checked the following:
+
+1. Deployed "VOA_Release_Solution" first.
+2. Deployed "VOA_SVT_DynamicsRelease_Solution" version "2.0.0.157" afterwards.
+3. Confirmed that the SVT deployment happened after the main release solution.
+4. Checked the solution layers for the custom page.
+5. Compared the number of custom page versions between source and target.
+6. Checked the AppModule XML and confirmed that custom pages are referenced through "canvasappid" applets.
+7. Published customisations after deployment.
+
+Expected Behaviour
+
+After importing "VOA_SVT_DynamicsRelease_Solution" version "2.0.0.157", the target environment should receive and use the latest published version of the custom page.
+
+The custom page in the target environment should match the latest version available in the source environment, or at least the latest version included in the managed solution export.
+
+The model-driven app should also load the latest deployed version of the custom page.
+
+Actual Behaviour
+
+The target environment still appears to have an older version of the custom page.
+
+The source environment shows around 12 versions, but the target environment shows only around 7 versions.
+
+As a result, the latest SVT custom page changes are not available in the target environment after deployment.
+
+Support Required
+
+Could you please help us confirm the following?
+
+1. Is custom page version history expected to move with managed solution deployment, or does only the active published version move?
+2. Why would the target environment show fewer custom page versions than the source after managed solution import?
+3. Does the model-driven app need to be republished after custom page changes before exporting the managed solution?
+4. Can having the same model-driven app and sitemap shared across two managed solutions cause this behaviour?
+5. Can having the same custom page layered by both "VOA_Release_Solution" and "VOA_SVT_DynamicsRelease_Solution" cause the target to use an older custom page version?
+6. How can we confirm which custom page version is actually being used at runtime by the model-driven app?
+7. What is the recommended ALM approach when two teams share the same model-driven app and sitemap but deliver different components through separate managed solutions?
+
+Business Impact
+
+This issue is blocking validation of the latest SVT changes in the target environment. It also creates uncertainty around how custom pages behave during managed solution deployment when the same model-driven app and sitemap are shared across multiple team solutions.
+
+Kind regards,
+Praveen
