@@ -440,9 +440,13 @@ public sealed class BulkDataRequestProcessor
     var sourceValueColumnName =
         Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_source";
     var validationStatusColumnName =
-        Environment.GetEnvironmentVariable("BulkInestionItemValidationStatusColumnName") ?? "voa_validationstatus";
+        Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName")
+        ?? Environment.GetEnvironmentVariable("BulkInestionItemValidationStatusColumnName")
+        ?? "voa_validationstatus";
     var validationMessageColumnName =
-        Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName") ?? "voa_validationfailurereason";
+        Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName")
+        ?? Environment.GetEnvironmentVariable("BulkIngestionItemValidationFailureReasonColumnName")
+        ?? "voa_validationfailurereason";
 
     var assignedManagerColumn =
         Environment.GetEnvironmentVariable("BulkIngestionItemAssignedManager") ?? "voa_assignedmanager";
@@ -1252,4 +1256,3 @@ public sealed class BulkDataRequestProcessor
         return upsertHereditamentRequest;
     }
 }
-
