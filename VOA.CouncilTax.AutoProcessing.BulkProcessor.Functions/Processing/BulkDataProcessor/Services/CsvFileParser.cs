@@ -96,7 +96,7 @@ namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkD
 
                     records.Add(new CsvRowRecord
                     {
-                        SsuId = ssuId,
+                        SsuId = string.Empty,
                         SourceRowNumber = rowNumber,
                         IsValidSsuGuid = false,
                         ValidationMessage = "ERR_SSU_REQUIRED: SSU ID is required."
