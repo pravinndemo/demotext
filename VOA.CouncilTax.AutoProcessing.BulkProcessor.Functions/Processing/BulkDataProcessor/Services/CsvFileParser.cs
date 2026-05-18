@@ -92,18 +92,34 @@ namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkD
                 if (string.IsNullOrWhiteSpace(ssuId))
                 {
                     _logger.LogWarning(
-                        $"CSV row {rowNumber} is empty. Skipping.");
+                        $"CSV row {rowNumber} has an empty SSU ID.");
 
-                    rowNumber++;
-                    continue;
+                    records.Add(new CsvRowRecord
+                    {
+                        SsuId = string.Empty,
+                        SourceRowNumber = rowNumber,
+                        IsValidSsuGuid = false,
+                        ValidationMessage = "ERR_SSU_REQUIRED: SSU ID is required."
+                    });
                 }
-
-                if (Guid.TryParse(ssuId, out Guid validGuid))
+                else if (Guid.TryParse(ssuId, out Guid validGuid))
                 {
                     records.Add(new CsvRowRecord
                     {
                         SsuId = ssuId,
-                        SourceRowNumber = rowNumber
+                        SourceRowNumber = rowNumber,
+                        IsValidSsuGuid = true,
+                        ParsedSsuId = validGuid
+                    });
+                }
+                else
+                {
+                    records.Add(new CsvRowRecord
+                    {
+                        SsuId = ssuId,
+                        SourceRowNumber = rowNumber,
+                        IsValidSsuGuid = false,
+                        ValidationMessage = "ERR_SSU_INVALID_GUID: SSU ID must be a valid GUID."
                     });
                 }
 
@@ -131,5 +147,11 @@ namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkD
         public string SsuId { get; set; } = string.Empty;
 
         public int SourceRowNumber { get; set; }
+
+        public bool IsValidSsuGuid { get; set; }
+
+        public Guid? ParsedSsuId { get; set; }
+
+        public string ValidationMessage { get; set; } = string.Empty;
     }
 }

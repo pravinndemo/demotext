@@ -440,7 +440,13 @@ public sealed class BulkDataRequestProcessor
     var sourceValueColumnName =
         Environment.GetEnvironmentVariable("BulkIngestionItemSourceValueColumnName") ?? "voa_source";
     var validationStatusColumnName =
-        Environment.GetEnvironmentVariable("BulkInestionItemValidationStatusColumnName") ?? "voa_validationstatus";
+        Environment.GetEnvironmentVariable("BulkIngestionItemValidationStatusColumnName")
+        ?? Environment.GetEnvironmentVariable("BulkInestionItemValidationStatusColumnName")
+        ?? "voa_validationstatus";
+    var validationMessageColumnName =
+        Environment.GetEnvironmentVariable("BulkIngestionItemValidationMessageColumnName")
+        ?? Environment.GetEnvironmentVariable("BulkIngestionItemValidationFailureReasonColumnName")
+        ?? "voa_validationfailurereason";
 
     var assignedManagerColumn =
         Environment.GetEnvironmentVariable("BulkIngestionItemAssignedManager") ?? "voa_assignedmanager";
@@ -449,6 +455,7 @@ public sealed class BulkDataRequestProcessor
         Environment.GetEnvironmentVariable("BulkIngestionItemAssignedTeam") ?? "voa_assignedteam";
 
     var pendingStatusValue = new OptionSetValue(Constants.StatusCodes.Pending);
+    var invalidStatusValue = new OptionSetValue(Constants.StatusCodes.Invalid);
 
     var assignmentMode = GetOptionSetValueOrNull(bulkIngestion, "voa_assignmentmode");
     EntityReference assignmentValue = new EntityReference();
@@ -593,6 +600,7 @@ public sealed class BulkDataRequestProcessor
                 fileColumnName);
 
             parseCsvSw.Stop();
+            csvRows ??= new List<CsvRowRecord>();
             csvRowsParsed = csvRows.Count;
 
             _logger.LogInformation(
@@ -611,15 +619,10 @@ public sealed class BulkDataRequestProcessor
             // Build upsert requests from CSV rows
             foreach (var csvRow in csvRows)
             {
-                upsertRequest.Requests.Add(UpsertRequest(new Guid(csvRow.SsuId)));
-
                 var itemEntity = new Entity(bulkIngestionItemEntityName)
                 {
                     [bulkIngestionItemParentLookupColumnName] =
                         new EntityReference(bulkProcessorEntityName, bulkProcessorId),
-
-                    [ssuIdColumnName] =
-                        new EntityReference("voa_ssu", new Guid(csvRow.SsuId)),
 
                     [sourceValueColumnName] =
                         new OptionSetValue(358800000),
@@ -630,10 +633,21 @@ public sealed class BulkDataRequestProcessor
                         assignmentMode == Constants.StatusCodes.Manager ? assignmentValue : null,
 
                     [assignedTeamColumn] =
-                        assignmentMode == Constants.StatusCodes.Team ? assignmentValue : null,
-
-                    [validationStatusColumnName] = pendingStatusValue
+                        assignmentMode == Constants.StatusCodes.Team ? assignmentValue : null
                 };
+
+                if (csvRow.IsValidSsuGuid && csvRow.ParsedSsuId.HasValue)
+                {
+                    upsertRequest.Requests.Add(UpsertRequest(csvRow.ParsedSsuId.Value));
+
+                    itemEntity[ssuIdColumnName] = new EntityReference("voa_ssu", csvRow.ParsedSsuId.Value);
+                    itemEntity[validationStatusColumnName] = pendingStatusValue;
+                }
+                else
+                {
+                    itemEntity[validationStatusColumnName] = invalidStatusValue;
+                    itemEntity[validationMessageColumnName] = csvRow.ValidationMessage;
+                }
 
                 bulkDataIngestionItemRequests.Add(
                     DataverseBulkItemWriter.BuildUpsertRequest(itemEntity));
@@ -663,7 +677,10 @@ public sealed class BulkDataRequestProcessor
     {
         var writeSw = Stopwatch.StartNew();
 
-        await _dataverseService.ExecuteAsync(upsertRequest);
+        if (upsertRequest.Requests.Count > 0)
+        {
+            await _dataverseService.ExecuteAsync(upsertRequest);
+        }
 
         var writeResult = bulkItemWriter.ExecuteItemRequestsAsync(bulkDataIngestionItemRequests);
 
@@ -1239,5 +1256,3 @@ public sealed class BulkDataRequestProcessor
         return upsertHereditamentRequest;
     }
 }
-
-
