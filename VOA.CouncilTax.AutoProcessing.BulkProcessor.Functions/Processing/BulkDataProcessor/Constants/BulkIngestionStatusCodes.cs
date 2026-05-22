@@ -8,7 +8,6 @@ namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkD
 /// - Draft (358800001) - Initial SaveItems state
 /// - Queued (358800002) - SubmitBatch submitted for processing
 /// - Partial Success (358800003) - Timer: some items succeeded, some failed
-/// - Delayed (358800004) - Timer: Retryable (transient failures)
 /// - Completed (358800009) - Timer: All items succeeded
 /// - Cancelled (358800010) - User cancellation
 /// - Failed (358800012) - Timer: All items failed
@@ -20,6 +19,11 @@ namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkD
 /// - Duplicate (358800003) - BulkItemValidator: Duplicate detected
 /// - Processed (358800004) - SubmitBatch: Successfully created request/job
 /// - Failed (358800005) - SubmitBatch or BulkItemValidator: Processing failed
+///
+/// Bulk Ingestion (voa_bulkingestion voa_processingstatus choice field):
+/// - Processed (589160000)
+/// - Processing (589160001)
+/// - Failed (589160002)
 /// </summary>
 public static class StatusCodes
 {
@@ -27,7 +31,6 @@ public static class StatusCodes
     public const int Draft = 358800001;          // Initial SaveItems state
     public const int Queued = 358800002;         // SubmitBatch submitted for processing
     public const int PartialSuccess = 358800003; // Timer: some items succeeded, some failed
-    public const int Delayed = 358800004;        // Timer: Retryable (transient failures)
     public const int Completed = 358800009;      // Timer: All items succeeded
     public const int Cancelled = 358800010;      // User cancellation
     public const int Failed = 358800012;         // Timer: All items failed
@@ -46,6 +49,11 @@ public static class StatusCodes
     public const int StageRequestCreation = 358800002;
     public const int StageJobCreation = 358800003;
     public const int StageCompleted = 358800004;
+
+    // Bulk Ingestion (voa_bulkingestion) Processing Status Choice Values
+    public const int ProcessingStatusProcessed = 589160000;
+    public const int ProcessingStatusProcessing = 589160001;
+    public const int ProcessingStatusFailed = 589160002;
 
     //Bulk Ingestion Assignment Mode
     public const int Team = 358800000;

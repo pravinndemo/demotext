@@ -79,7 +79,7 @@ public sealed class BulkItemValidator
                 var rawSourceValue = item.GetAttributeValue<string>(sourceValueColumnName) ?? string.Empty;
                 var ssuId = NormalizeValue(rawSsuId);
                 var sourceValue = NormalizeValue(rawSourceValue);
-                var validationStatus = "Valid";
+                var validationStatus = StatusCodes.Valid;
                 var validationMessage = "";
                 var isDuplicate = false;
                 //var duplicateCategory = "";
@@ -87,28 +87,28 @@ public sealed class BulkItemValidator
                 // Rule 1: SSU ID is required
                 if (string.IsNullOrWhiteSpace(ssuId))
                 {
-                    validationStatus = "Invalid";
+                    validationStatus = StatusCodes.Invalid;
                     validationMessage = "ERR_SSU_REQUIRED: SSU ID is required.";
                     result.InvalidCount++;
                 }
                 // Rule 2: SSU ID must be a valid GUID
                 else if (!Guid.TryParse(ssuId, out _))
                 {
-                    validationStatus = "Invalid";
+                    validationStatus = StatusCodes.Invalid;
                     validationMessage = "ERR_SSU_INVALID_GUID: SSU ID must be a valid GUID.";
                     result.InvalidCount++;
                 }
                 // Rule 3: Source value required only when configured
                 else if (requireSourceValue && string.IsNullOrWhiteSpace(sourceValue))
                 {
-                    validationStatus = "Invalid";
+                    validationStatus = StatusCodes.Invalid;
                     validationMessage = "ERR_SOURCE_REQUIRED: Source value is required for this batch type.";
                     result.InvalidCount++;
                 }
                 // Rule 4: Check duplicate SSU IDs within this batch
                 else if (!seenSsuIds.Add(ssuId))
                 {
-                    validationStatus = "Invalid";
+                    validationStatus = StatusCodes.Duplicate;
                     validationMessage = "ERR_DUP_SSU_SAME_BATCH: Duplicate SSU ID within this batch.";
                     isDuplicate = true;
                     //duplicateCategory = "Same Batch";
@@ -117,7 +117,7 @@ public sealed class BulkItemValidator
                 // Rule 5: Optional duplicate source value check (only when source value exists)
                 else if (!string.IsNullOrWhiteSpace(sourceValue) && !seenSourceValues.Add(sourceValue))
                 {
-                    validationStatus = "Invalid";
+                    validationStatus = StatusCodes.Duplicate;
                     validationMessage = "ERR_DUP_SOURCE_SAME_BATCH: Duplicate source value within this batch.";
                     isDuplicate = true;
                     //duplicateCategory = "Same Batch";
@@ -147,7 +147,7 @@ public sealed class BulkItemValidator
 
                     if (conflictingBatches.Count > 0)
                     {
-                        validationStatus = "Invalid";
+                        validationStatus = StatusCodes.Duplicate;
                         validationMessage = CrossBatchDuplicateMessageHelper.BuildErrorMessage(conflictingBatches);
                         isDuplicate = true;
                         //duplicateCategory = "Other Batch";

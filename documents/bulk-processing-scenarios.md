@@ -34,7 +34,7 @@ Rules already agreed:
 |---|---|---|---|
 | Save items in Draft | `POST /bulk-data/save-items` | PCF selection save or CSV save via Custom API | Keeps batch in `Draft` |
 | Final submit to queue and create work | `POST /bulk-data/submit-batch` | Final manual submit via Custom API | Moves `Draft -> Queued`, creates requests for valid items, and creates incidents directly when applicable |
-| SVT single | `POST /bulk-data/svt-single` | SVT caller via Custom API | Bypasses bulk batch item flow |
+| SVT tracking | `POST /bulk-data/svt-single` | SVT caller via Custom API | Uses the SVT tracking row and bypasses bulk batch item flow |
 
 These are the only supported routes for this first-time implementation.
 
@@ -203,6 +203,7 @@ Expected outcome:
 - Submission metadata is stamped.
 - Requests are created for valid items.
 - If template mode is `Request and Job(s)`, the Azure Function creates the incident directly and links it back to the request and bulk item.
+- Ownership for the created request and incident follows the bulk item's assigned team or manager.
 - Batch becomes read-only for normal edits.
 
 ## Scenario 7: Optional Worker Processing

@@ -1,3 +1,4 @@
+using System;
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
 
 /// <summary>
@@ -18,6 +19,8 @@ public static class EntityFields
     {
         public const string Id = "voa_bulkingestionid";
         public const string Name = "voa_name";
+        public const string BatchReference = "voa_batchreference";
+        public const string DelayProcessingUntil = "voa_delayprocessinguntil";
         public const string Status = "statuscode";
         public const string Source = "voa_source";
         public const string SourceFile = "voa_sourcefile";
@@ -60,6 +63,11 @@ public static class EntityFields
     {
         public const int Active = 0;
         public const int Inactive = 1;
+    }
+
+    public static class JobType
+    {
+        public static readonly Guid DataEnhancement = new Guid("30787a01-4259-ee11-be6f-000d3a86c49a");
     }
 }
 

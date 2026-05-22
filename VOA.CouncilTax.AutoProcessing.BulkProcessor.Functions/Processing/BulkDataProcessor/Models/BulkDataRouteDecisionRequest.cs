@@ -20,6 +20,9 @@ public sealed class BulkDataRouteDecisionRequest
     /// <summary>Component name for SVT mode. Persisted to request/job metadata.</summary>
     public string? ComponentName { get; set; }
 
+    /// <summary>SVT tracking row id when dispatching via the new tracking flow.</summary>
+    public Guid? SvtProcessingId { get; set; }
+
     /// <summary>Dataverse file column name to read CSV from. Defaults to "sourcefile" when not supplied.</summary>
     public string? FileColumnName { get; set; }
 

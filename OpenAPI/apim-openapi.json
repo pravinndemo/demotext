@@ -515,7 +515,7 @@
     "/bulk-data/svt-single": {
       "post": {
         "summary": "Create SVT Single Request",
-        "description": "Creates a single SVT request/job using `ssuId`, `userId`, and `componentName`.",
+        "description": "Creates a single SVT request/job using `svtProcessingId`.",
         "operationId": "T_SvtSingleHttpTrigger",
         "requestBody": {
           "required": true,
@@ -528,9 +528,7 @@
                 "svtSingle": {
                   "summary": "SVT single-item request",
                   "value": {
-                    "ssuId": "100000000001",
-                    "userId": "00000000-0000-0000-0000-000000000002",
-                    "componentName": "SVT-UI",
+                    "svtProcessingId": "11111111-2222-3333-4444-555555555555",
                     "correlationId": "svt-single-001"
                   }
                 }
@@ -577,7 +575,7 @@
                     "value": {
                       "accepted": false,
                       "code": "INVALID_ROUTE_FOR_ENDPOINT",
-                      "message": "This endpoint only accepts SVT payload (ssuid + userId + componentName).",
+                      "message": "This endpoint only accepts SVT payload (svtProcessingId).",
                       "correlationId": "svt-single-001"
                     }
                   },
@@ -628,6 +626,11 @@
           "ssuId": {
             "type": "string",
             "description": "Single SSU ID for SVT mode."
+          },
+          "svtProcessingId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "SVT tracking row identifier for the current dispatch."
           },
           "userId": {
             "type": "string",

@@ -23,13 +23,17 @@ This document captures the current validation rules and error codes implemented 
 ### 1.3 SaveItems fatal processing error
 - `SAVE_ITEMS_FAILED`: unhandled exception during save-items processing.
 
-### 1.4 SVT single path
-- `SVT_CREATION_ERROR`: unhandled exception in SVT creation flow.
+### 1.4 SVT tracking row validation and dispatch
+- `SVT_CORRELATION_ID_REQUIRED`: correlation id is missing for the SVT tracking row.
+- `SVT_TRACKING_LOOKUP_FAILED`: failed to retrieve the SVT tracking row from Dataverse.
+- `SVT_ALREADY_PROCESSED`: the same correlation id already completed.
+- `SVT_ALREADY_PROCESSING`: the tracking row is already in `Processing`.
+- `SVT_DISPATCH_NOT_REQUESTED`: SVT plug-in trigger fired without a requested dispatch state.
 
 ## 2. Route Combination Validation (`BulkDataRouteDecisionBuilder`)
 
 - `INVALID_COMBINATION`: illegal mix of bulk and SVT fields, or no valid combination.
-- `INVALID_SVT_REQUEST`: SVT mode missing one or more required fields (`ssuid`, `userId`, `componentName`).
+- `INVALID_SVT_REQUEST`: SVT tracking mode missing `svtProcessingId`, or legacy direct SVT fields were supplied.
 - `BULK_PROCESSOR_ID_REQUIRED`: `ssuIds` supplied without `bulkProcessorId`.
 
 ## 3. Item Staging Validation (`BulkItemValidator`)
@@ -65,6 +69,15 @@ Batch/single creation errors:
 - `INVALID_SSU_FORMAT`: item SSU ID not a valid GUID.
 - `CREATION_FAILED`: generic create failure exception.
 
+## 4.1 SVT Tracking and Retry Errors
+
+These are used by the SVT tracking row and any plug-in/function handoff logic.
+
+- `SVT_REQUEST_FAILED`: request creation failed.
+- `SVT_JOB_FAILED`: job creation failed.
+- `SVT_DUPLICATE_REQUEST`: an active request/job already exists for the same SVT context.
+- `SVT_NOT_RETRYABLE`: retry was requested for a non-retryable row.
+
 ## 5. Timer Processing Failure Semantics (`BulkIngestionProcessor`)
 
 Timer does not return HTTP `Code` values, but writes per-item failure reasons and statuses.
@@ -82,7 +95,6 @@ Header (`voa_bulkingestion.statuscode`):
 - Draft `358800001`
 - Queued `358800002`
 - Partial Success `358800003`
-- Delayed `358800004`
 - Completed `358800009`
 - Failed `358800012`
 
@@ -106,3 +118,4 @@ Item processing stage (`voa_processingstage`):
 - HTTP response `Code` values are authoritative for API callers.
 - Item-level `voa_validationfailurereason` is authoritative for row-level troubleshooting.
 - `voa_canreprocess` indicates whether timer can retry failed rows in later cycles.
+- SVT row `voa_status`, `voa_requestid`, `voa_jobid`, and `voa_errormessage` are the authoritative fields for PCF polling and support triage.

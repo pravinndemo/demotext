@@ -5,6 +5,7 @@ using Microsoft.Xrm.Sdk.Query;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
 using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Models;
 
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
@@ -62,15 +63,15 @@ public static class CrossBatchDuplicateLookupService
         var conflicts = new List<CrossBatchDuplicateBatchInfo>(conflictBatchIds.Count);
         foreach (var conflictBatchId in conflictBatchIds)
         {
-            string batchName = string.Empty;
+            string batchReference = string.Empty;
 
             try
             {
                 var batch = await dataverseService.RetrieveAsync(
                     batchEntityName,
                     conflictBatchId,
-                    new ColumnSet("voa_name"));
-                batchName = batch.GetAttributeValue<string>("voa_name")?.Trim() ?? string.Empty;
+                    new ColumnSet(EntityFields.BulkIngestionFields.Name));
+                batchReference = batch.GetAttributeValue<string>(EntityFields.BulkIngestionFields.Name)?.Trim() ?? string.Empty;
             }
             catch (Exception lookupEx)
             {
@@ -84,7 +85,7 @@ public static class CrossBatchDuplicateLookupService
             conflicts.Add(new CrossBatchDuplicateBatchInfo
             {
                 BatchId = conflictBatchId,
-                BatchName = batchName,
+                BatchName = batchReference,
             });
         }
 

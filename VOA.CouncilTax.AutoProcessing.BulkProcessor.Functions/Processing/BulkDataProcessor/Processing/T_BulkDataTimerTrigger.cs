@@ -32,6 +32,7 @@ public class T_BulkDataTimerTrigger
     [Function("T_BulkDataTimerTrigger")]
     public async Task Run([TimerTrigger(TimerScheduleSettings.BulkIngestionTimerSchedule)] TimerInfo myTimer)
     {
+        // Timer is the bulk worker entry point. It picks up queued or partially completed batches and advances them.
         _logger.LogInformation($"T_BulkDataTimerTrigger executed at {DateTime.UtcNow}");
         _logger.LogInformation("Queue-only bulk mode enabled: timer will create request/job records for queued bulk ingestions.");
 

@@ -1,3 +1,5 @@
+using VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Constants;
+
 namespace VOA.CouncilTax.AutoProcessing.BulkProcessor.Functions.Processing.BulkDataProcessor.Services;
 
 /// <summary>
@@ -53,14 +55,14 @@ public static class FetcherXMLHelper
     /// </summary>
     public static string GetActiveBulkIngestions()
     {
-        return @"<fetch version='1.0' output-format='xml-platform' mapping='logical' distinct='false'>
+        return $@"<fetch version='1.0' output-format='xml-platform' mapping='logical' distinct='false'>
   <entity name='voa_bulkingestion'>
     <attribute name='voa_bulkingestionid' />
-    <attribute name='voa_name' />
+    <attribute name='{EntityFields.BulkIngestionFields.Name}' />
     <attribute name='createdon' />
     <attribute name='voa_processingjobtype' />
     <attribute name='statuscode' />
-    <order attribute='voa_name' descending='false' />
+    <order attribute='{EntityFields.BulkIngestionFields.Name}' descending='false' />
     <filter type='and'>
       <condition attribute='statecode' operator='eq' value='0' />
     </filter>
@@ -113,10 +115,10 @@ public static class FetcherXMLHelper
 /// <returns>A FetchXML query string to retrieve the specified bulk ingestion record.</returns>
     public static string getBulkIngestionFromID(string bulkIngestionId)
     {
-        string fetchXML = $@"<fetch>
+    string fetchXML = $@"<fetch>
     <entity name='voa_bulkingestion'>
     <attribute name='voa_bulkingestionid'/>
-    <attribute name='voa_name'/>
+    <attribute name='{EntityFields.BulkIngestionFields.Name}'/>
     <attribute name='createdon'/>
     <attribute name='voa_assignedteam'/>
     <attribute name='voa_assignedmanager'/>
